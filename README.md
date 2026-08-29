@@ -81,6 +81,8 @@ npm run tauri:build
 
 Les installateurs MSI et NSIS sont générés sous `src-tauri/target/release/bundle/`.
 
+La configuration Windows réserve une pile de 8 Mio pour le binaire et les tests. Cette valeur est nécessaire à SQLCipher/OpenSSL dans les builds MSVC non optimisés et évite les erreurs `STATUS_STACK_OVERFLOW` observées dans GitHub Actions.
+
 ## Sécurité et récupération
 
 Au premier démarrage, le gérant choisit :

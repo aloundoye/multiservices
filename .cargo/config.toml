@@ -1,0 +1,15 @@
+# SQLCipher embarque OpenSSL statiquement. Sous MSVC, ses opérations de
+# chiffrement ont besoin de plus que la pile Windows par défaut, surtout en
+# compilation de test non optimisée. LNK4099 concerne uniquement les symboles
+# de débogage PDB absents des objets OpenSSL vendored.
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+  "-C", "link-arg=/STACK:8388608",
+  "-C", "link-arg=/IGNORE:4099",
+]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = [
+  "-C", "link-arg=/STACK:8388608",
+  "-C", "link-arg=/IGNORE:4099",
+]
