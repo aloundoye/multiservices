@@ -9,9 +9,8 @@ jobs:
   test-and-build:
     runs-on: windows-latest
     env:
-      # Les tests Rust sont exécutés dans des threads distincts. SQLCipher et
-      # OpenSSL vendored dépassent la pile de 2 Mio par défaut sous Windows.
-      RUST_MIN_STACK: 8388608
+      # Garde une marge pour les opérations SQLCipher/OpenSSL du test dédié.
+      RUST_MIN_STACK: 33554432
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,7 +27,7 @@ jobs:
       - run: npm test
       - run: npm run build
       - name: Tests Rust
-        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets -- --test-threads=1
       - name: Clippy Rust
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: npm run tauri build

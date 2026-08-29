@@ -4,12 +4,12 @@
 # de débogage PDB absents des objets OpenSSL vendored.
 [target.x86_64-pc-windows-msvc]
 rustflags = [
-  "-C", "link-arg=/STACK:8388608",
+  "-C", "link-arg=/STACK:33554432",
   "-C", "link-arg=/IGNORE:4099",
 ]
 
 [target.aarch64-pc-windows-msvc]
 rustflags = [
-  "-C", "link-arg=/STACK:8388608",
+  "-C", "link-arg=/STACK:33554432",
   "-C", "link-arg=/IGNORE:4099",
 ]

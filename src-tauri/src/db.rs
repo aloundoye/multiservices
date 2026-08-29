@@ -1102,14 +1102,28 @@ pub fn integrity_check(connection: &Connection) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
-    fn test_db() -> (TempDir, Connection) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test.db");
-        let connection = open_database(&path, &[9u8; 32]).unwrap();
+    const SQLCIPHER_TEST_STACK_SIZE: usize = 32 * 1024 * 1024;
+
+    fn test_db() -> Connection {
+        // Les tests ci-dessous vérifient les règles comptables, pas le
+        // chiffrement. Une base en mémoire évite de lancer plusieurs KDF
+        // SQLCipher/OpenSSL en parallèle sur les petits threads de libtest.
+        let connection = Connection::open_in_memory().unwrap();
         migrate(&connection).unwrap();
-        (dir, connection)
+        connection
+    }
+
+    fn run_sqlcipher_test(test: impl FnOnce() + Send + 'static) {
+        let handle = std::thread::Builder::new()
+            .name("sqlcipher-roundtrip".into())
+            .stack_size(SQLCIPHER_TEST_STACK_SIZE)
+            .spawn(test)
+            .expect("impossible de lancer le test SQLCipher");
+
+        if let Err(panic) = handle.join() {
+            std::panic::resume_unwind(panic);
+        }
     }
 
     fn setup(connection: &mut Connection) {
@@ -1134,7 +1148,7 @@ mod tests {
 
     #[test]
     fn journal_updates_expected_capital() {
-        let (_dir, mut connection) = test_db();
+        let mut connection = test_db();
         setup(&mut connection);
         create_journal_entry(
             &mut connection,
@@ -1168,7 +1182,7 @@ mod tests {
 
     #[test]
     fn debt_and_partial_payment_preserve_receivable_logic() {
-        let (_dir, mut connection) = test_db();
+        let mut connection = test_db();
         setup(&mut connection);
         let debt = create_debt(
             &mut connection,
@@ -1203,7 +1217,7 @@ mod tests {
 
     #[test]
     fn overpayment_is_rejected() {
-        let (_dir, mut connection) = test_db();
+        let mut connection = test_db();
         setup(&mut connection);
         let debt = create_debt(
             &mut connection,
@@ -1233,7 +1247,7 @@ mod tests {
 
     #[test]
     fn non_zero_inventory_variance_requires_explanation_and_becomes_baseline() {
-        let (_dir, mut connection) = test_db();
+        let mut connection = test_db();
         setup(&mut connection);
         let invalid = close_inventory(
             &mut connection,
@@ -1268,7 +1282,7 @@ mod tests {
 
     #[test]
     fn inventory_correction_is_linked_and_updates_expected_capital() {
-        let (_dir, mut connection) = test_db();
+        let mut connection = test_db();
         setup(&mut connection);
         let inventory = last_inventory(&connection).unwrap();
         let entry = create_inventory_correction(
@@ -1292,5 +1306,29 @@ mod tests {
             get_dashboard(&connection).unwrap().expected_capital,
             4_975_000
         );
+    }
+
+    #[test]
+    fn encrypted_database_roundtrip_uses_sqlcipher() {
+        run_sqlcipher_test(|| {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("encrypted.db");
+            let key = [9u8; 32];
+
+            {
+                let connection = open_database(&path, &key).unwrap();
+                migrate(&connection).unwrap();
+                integrity_check(&connection).unwrap();
+            }
+
+            let reopened = open_database(&path, &key).unwrap();
+            integrity_check(&reopened).unwrap();
+            drop(reopened);
+
+            assert!(matches!(
+                open_database(&path, &[8u8; 32]),
+                Err(AppError::InvalidPin)
+            ));
+        });
     }
 }
