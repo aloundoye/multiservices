@@ -21,7 +21,6 @@ pub fn open_database(path: &Path, database_key: &[u8]) -> AppResult<Connection> 
     let key_hex = hex::encode(database_key);
     connection.execute_batch(&format!(
         "PRAGMA key = \"x'{key_hex}'\";
-         PRAGMA cipher_memory_security = ON;
          PRAGMA foreign_keys = ON;
          PRAGMA busy_timeout = 5000;"
     ))?;
@@ -1103,8 +1102,6 @@ pub fn integrity_check(connection: &Connection) -> AppResult<()> {
 mod tests {
     use super::*;
 
-    const SQLCIPHER_TEST_STACK_SIZE: usize = 32 * 1024 * 1024;
-
     fn test_db() -> Connection {
         // Les tests ci-dessous vérifient les règles comptables, pas le
         // chiffrement. Une base en mémoire évite de lancer plusieurs KDF
@@ -1112,18 +1109,6 @@ mod tests {
         let connection = Connection::open_in_memory().unwrap();
         migrate(&connection).unwrap();
         connection
-    }
-
-    fn run_sqlcipher_test(test: impl FnOnce() + Send + 'static) {
-        let handle = std::thread::Builder::new()
-            .name("sqlcipher-roundtrip".into())
-            .stack_size(SQLCIPHER_TEST_STACK_SIZE)
-            .spawn(test)
-            .expect("impossible de lancer le test SQLCipher");
-
-        if let Err(panic) = handle.join() {
-            std::panic::resume_unwind(panic);
-        }
     }
 
     fn setup(connection: &mut Connection) {
@@ -1310,25 +1295,30 @@ mod tests {
 
     #[test]
     fn encrypted_database_roundtrip_uses_sqlcipher() {
-        run_sqlcipher_test(|| {
-            let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("encrypted.db");
-            let key = [9u8; 32];
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("encrypted.db");
+        let key = [9u8; 32];
 
-            {
-                let connection = open_database(&path, &key).unwrap();
-                migrate(&connection).unwrap();
-                integrity_check(&connection).unwrap();
-            }
-
-            let reopened = open_database(&path, &key).unwrap();
-            integrity_check(&reopened).unwrap();
-            drop(reopened);
-
+        {
+            let connection = open_database(&path, &key).unwrap();
+            migrate(&connection).unwrap();
+            integrity_check(&connection).unwrap();
+            let memory_security: String = connection
+                .query_row("PRAGMA cipher_memory_security", [], |row| row.get(0))
+                .unwrap();
             assert!(matches!(
-                open_database(&path, &[8u8; 32]),
-                Err(AppError::InvalidPin)
+                memory_security.to_ascii_lowercase().as_str(),
+                "0" | "off"
             ));
-        });
+        }
+
+        let reopened = open_database(&path, &key).unwrap();
+        integrity_check(&reopened).unwrap();
+        drop(reopened);
+
+        assert!(matches!(
+            open_database(&path, &[8u8; 32]),
+            Err(AppError::InvalidPin)
+        ));
     }
 }
