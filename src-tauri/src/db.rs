@@ -747,14 +747,19 @@ fn payment_for_debt(connection: &Connection, debt_id: &str) -> AppResult<Vec<Deb
     Ok(values)
 }
 
-fn display_debt_status(base: &str, remaining: Money, due_date: Option<&str>) -> String {
+fn display_debt_status(
+    base: &str,
+    remaining: Money,
+    due_date: Option<&str>,
+    today: NaiveDate,
+) -> String {
     if base == "cancelled" {
         return "cancelled".into();
     }
     if remaining == 0 {
         return "paid".into();
     }
-    let today = Utc::now().date_naive().format("%Y-%m-%d").to_string();
+    let today = today.format("%Y-%m-%d").to_string();
     if due_date.is_some_and(|due| due < today.as_str()) {
         "overdue".into()
     } else if base == "partial" {
@@ -792,6 +797,7 @@ pub fn list_debts(
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    let today = Utc::now().date_naive();
     let mut debts = Vec::with_capacity(raw.len());
     for (
         id,
@@ -812,7 +818,7 @@ pub fn list_debts(
         }
         debts.push(Debt {
             payments: payment_for_debt(connection, &id)?,
-            status: display_debt_status(&base_status, remaining, due_date.as_deref()),
+            status: display_debt_status(&base_status, remaining, due_date.as_deref(), today),
             id,
             customer_name,
             phone,
@@ -1177,7 +1183,8 @@ mod tests {
                 provider: "wave".into(),
                 amount: 50_000,
                 issued_at: "2026-08-26".into(),
-                due_date: Some("2026-08-30".into()),
+                // Les échéances sont testées séparément avec une date contrôlée.
+                due_date: None,
                 note: None,
             },
         )
@@ -1198,6 +1205,46 @@ mod tests {
         assert_eq!(updated.remaining, 30_000);
         assert_eq!(updated.status, "partial");
         assert_eq!(open_receivables(&connection).unwrap(), 30_000);
+    }
+
+    #[test]
+    fn debt_status_changes_only_after_its_due_date() {
+        let due_date = Some("2026-08-30");
+        let cases = [
+            ("2026-08-29", false),
+            ("2026-08-30", false),
+            ("2026-08-31", true),
+            ("2026-09-05", true),
+            ("2099-01-01", true),
+        ];
+
+        for (date, overdue) in cases {
+            let today = NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap();
+            for base_status in ["open", "partial"] {
+                let expected = if overdue { "overdue" } else { base_status };
+                assert_eq!(
+                    display_debt_status(base_status, 30_000, due_date, today),
+                    expected,
+                    "statut {base_status} au {date}"
+                );
+                assert_eq!(
+                    display_debt_status(base_status, 30_000, None, today),
+                    base_status,
+                    "une dette sans échéance ne devient pas en retard au {date}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn settled_and_cancelled_debts_are_not_overdue() {
+        let today = NaiveDate::from_ymd_opt(2026, 9, 5).unwrap();
+        let due_date = Some("2026-08-30");
+        assert_eq!(display_debt_status("paid", 0, due_date, today), "paid");
+        assert_eq!(
+            display_debt_status("cancelled", 0, due_date, today),
+            "cancelled"
+        );
     }
 
     #[test]
