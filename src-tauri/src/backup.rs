@@ -340,7 +340,10 @@ mod tests {
             security::test_envelope(&key, "123456", "une phrase de récupération solide").unwrap();
         security::write_envelope(&state.paths.security, &envelope).unwrap();
         state.set_recovered_session(key.clone().into()).unwrap();
-        assert_eq!(db::schema_version(&connection).unwrap(), 2);
+        assert_eq!(
+            db::schema_version(&connection).unwrap(),
+            crate::db::SCHEMA_VERSION
+        );
         let backups = list_backups(&state).unwrap();
         assert_eq!(backups.len(), 1);
         let extracted = extract_and_validate(Path::new(&backups[0].path)).unwrap();
@@ -356,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn restores_v1_and_v2_archives_in_staging_and_preserves_multi_account_history() {
+    fn restores_legacy_and_current_archives_and_preserves_multi_account_history() {
         const PASSWORD: &str = "une phrase de récupération solide";
         let source_dir = TempDir::new().unwrap();
         let source = AppState::new(source_dir.path().to_path_buf()).unwrap();
@@ -406,9 +409,9 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        let v2 = create_backup(&source, None).unwrap();
+        let current = create_backup(&source, None).unwrap();
         let expected = source.with_connection(|db| Ok(snapshot(db))).unwrap();
-        for (version, backup) in [(1, v1), (2, v2)] {
+        for (version, backup) in [(1, v1), (db::SCHEMA_VERSION, current)] {
             let target_dir = TempDir::new().unwrap();
             let target = AppState::new(target_dir.path().to_path_buf()).unwrap();
             let input = RestoreInput {
@@ -416,7 +419,7 @@ mod tests {
                 recovery_password: PASSWORD.into(),
                 new_pin: "654321".into(),
             };
-            if version == 2 {
+            if version == db::SCHEMA_VERSION {
                 // Exercise replacement of an existing unlocked installation as well.
                 let mut existing = db::open_database(&target.paths.database, &[22u8; 32]).unwrap();
                 db::migrate(&existing).unwrap();
@@ -450,7 +453,7 @@ mod tests {
             assert!(target.setup_status().unlocked);
             target
                 .with_connection(|db| {
-                    assert_eq!(db::schema_version(db)?, 2);
+                    assert_eq!(db::schema_version(db)?, crate::db::SCHEMA_VERSION);
                     if version == 1 {
                         assert_eq!(historical_data(db), legacy);
                         assert_eq!(accounts::list(db)?.len(), 4);
@@ -468,6 +471,142 @@ mod tests {
                 })
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn restores_v2_then_roundtrips_stock_and_idempotency_in_encrypted_v3_backup() {
+        use crate::stock;
+        const PASSWORD: &str = "une phrase de récupération solide";
+        let source_dir = TempDir::new().unwrap();
+        let source = AppState::new(source_dir.path().to_path_buf()).unwrap();
+        let key = vec![41u8; 32];
+        let connection = db::open_database(&source.paths.database, &key).unwrap();
+        legacy_database(&connection);
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .unwrap();
+        connection
+            .execute_batch(include_str!("migration_v2.sql"))
+            .unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        let historical = historical_data(&connection);
+        security::write_envelope(
+            &source.paths.security,
+            &security::test_envelope(&key, "123456", PASSWORD).unwrap(),
+        )
+        .unwrap();
+        let v2 = before_migration(&connection, &key, &source.paths).unwrap();
+        assert_eq!(
+            extract_and_validate(&v2).unwrap().manifest.schema_version,
+            2
+        );
+        drop(connection);
+        let restored_dir = TempDir::new().unwrap();
+        let restored = AppState::new(restored_dir.path().to_path_buf()).unwrap();
+        restore_backup_with(
+            &restored,
+            RestoreInput {
+                backup_path: v2.to_string_lossy().into(),
+                recovery_password: PASSWORD.into(),
+                new_pin: "654321".into(),
+            },
+            security::test_envelope,
+        )
+        .unwrap();
+        let retry = restored
+            .with_connection(|db| {
+                assert_eq!(historical_data(db), historical);
+                assert!(stock::products(db)?.is_empty());
+                let product = stock::create_product(
+                    db,
+                    CreateProductInput {
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        name: "Chargeur".into(),
+                        price: 2000,
+                        initial_stock: 10,
+                    },
+                )?;
+                let sale = CreateSaleInput {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    account_id: "legacy-cash".into(),
+                    occurred_at: "2026-09-07".into(),
+                    note: None,
+                    lines: vec![SaleLineInput {
+                        product_id: product.id.clone(),
+                        quantity: 2,
+                        unit_price: 1750,
+                    }],
+                };
+                stock::create_sale(db, sale.clone())?;
+                let receipt = stock::receive_stock(
+                    db,
+                    ReceiveStockInput {
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        product_id: product.id.clone(),
+                        quantity: 5,
+                        amount: 6000,
+                        account_id: "legacy-wave".into(),
+                        occurred_at: "2026-09-07".into(),
+                        note: Some("Livraison".into()),
+                    },
+                )?;
+                stock::cancel_operation(
+                    db,
+                    CancelProductOperationInput {
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        operation_id: receipt.id,
+                        reason: "Achat saisi en double".into(),
+                    },
+                )?;
+                stock::adjust_stock(
+                    db,
+                    AdjustStockInput {
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        product_id: product.id,
+                        quantity: 7,
+                        reason: "Un article abîmé".into(),
+                    },
+                )?;
+                Ok(sale)
+            })
+            .unwrap();
+        let stock_snapshot = |db: &Connection| -> AppResult<serde_json::Value> {
+            Ok(
+                serde_json::json!({ "products": stock::products(db)?, "operations": stock::operations(db)?,
+                "movements": stock::movements(db, None)?, "finance": snapshot(db) }),
+            )
+        };
+        let expected = restored.with_connection(|db| stock_snapshot(db)).unwrap();
+        let archive = create_backup(&restored, None).unwrap();
+        assert_eq!(
+            extract_and_validate(Path::new(&archive.path))
+                .unwrap()
+                .manifest
+                .schema_version,
+            3
+        );
+        let target_dir = TempDir::new().unwrap();
+        let target = AppState::new(target_dir.path().to_path_buf()).unwrap();
+        restore_backup_with(
+            &target,
+            RestoreInput {
+                backup_path: archive.path,
+                recovery_password: PASSWORD.into(),
+                new_pin: "123456".into(),
+            },
+            security::test_envelope,
+        )
+        .unwrap();
+        target
+            .with_connection(|db| {
+                assert_eq!(stock_snapshot(db)?, expected);
+                stock::create_sale(db, retry)?;
+                assert_eq!(stock_snapshot(db)?, expected);
+                db::integrity_check(db)
+            })
+            .unwrap();
     }
 
     #[test]

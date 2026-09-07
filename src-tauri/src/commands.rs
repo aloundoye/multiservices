@@ -277,3 +277,92 @@ pub fn preview_opening(
         difference,
     })
 }
+
+#[tauri::command]
+pub fn list_products(state: State<'_, AppState>) -> CommandResult<Vec<Product>> {
+    state
+        .with_connection(|c| crate::stock::products(c))
+        .map_err(command_error)
+}
+#[tauri::command]
+pub fn list_product_operations(state: State<'_, AppState>) -> CommandResult<Vec<ProductOperation>> {
+    state
+        .with_connection(|c| crate::stock::operations(c))
+        .map_err(command_error)
+}
+#[tauri::command]
+pub fn list_stock_movements(
+    product_id: Option<String>,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<StockMovement>> {
+    state
+        .with_connection(|c| crate::stock::movements(c, product_id.as_deref()))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn create_product(
+    input: CreateProductInput,
+    state: State<'_, AppState>,
+) -> CommandResult<Product> {
+    state
+        .with_connection(|c| crate::stock::create_product(c, input))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn update_product(
+    input: UpdateProductInput,
+    state: State<'_, AppState>,
+) -> CommandResult<Product> {
+    state
+        .with_connection(|c| crate::stock::update_product(c, input))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn archive_product(
+    input: ArchiveProductInput,
+    state: State<'_, AppState>,
+) -> CommandResult<Product> {
+    state
+        .with_connection(|c| crate::stock::archive_product(c, input))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn adjust_stock(input: AdjustStockInput, state: State<'_, AppState>) -> CommandResult<Product> {
+    state
+        .with_connection(|c| crate::stock::adjust_stock(c, input))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn create_product_sale(
+    input: CreateSaleInput,
+    state: State<'_, AppState>,
+) -> CommandResult<ProductOperation> {
+    state
+        .with_connection(|c| crate::stock::create_sale(c, input))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn receive_stock(
+    input: ReceiveStockInput,
+    state: State<'_, AppState>,
+) -> CommandResult<ProductOperation> {
+    state
+        .with_connection(|c| crate::stock::receive_stock(c, input))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn cancel_product_operation(
+    input: CancelProductOperationInput,
+    state: State<'_, AppState>,
+) -> CommandResult<ProductOperation> {
+    state
+        .with_connection(|c| crate::stock::cancel_operation(c, input))
+        .map_err(command_error)
+}

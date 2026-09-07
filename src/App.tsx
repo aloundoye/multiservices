@@ -6,6 +6,7 @@ import { LoginScreen, SetupScreen } from "./screens/AuthScreens";
 import { DashboardPage } from "./screens/DashboardPage";
 import { DebtsPage } from "./screens/DebtsPage";
 import { InventoryHistoryPage, InventoryPage } from "./screens/InventoryPages";
+import { ProductsPage } from "./screens/ProductsPage";
 import { JournalPage } from "./screens/JournalPage";
 import { ReportsPage } from "./screens/ReportsPage";
 import { SettingsPage } from "./screens/SettingsPage";
@@ -72,6 +73,7 @@ export default function App() {
       case "dashboard": return <DashboardPage dashboard={dashboard} onNavigate={setPage} />;
       case "inventory": return <InventoryPage dashboard={dashboard} onDone={setToast} />;
       case "history": return <InventoryHistoryPage onChanged={() => void refresh()} notify={setToast} />;
+      case "products": return <ProductsPage onChanged={refresh} notify={setToast} />;
       case "journal": return <JournalPage onChanged={() => void refresh()} notify={setToast} />;
       case "debts": return <DebtsPage onChanged={() => void refresh()} notify={setToast} />;
       case "reports": return <ReportsPage notify={setToast} />;
