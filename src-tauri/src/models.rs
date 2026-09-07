@@ -16,10 +16,7 @@ pub struct SetupInput {
     pub pin: String,
     pub recovery_password: String,
     pub initial_capital: Money,
-    pub orange_money: Money,
-    pub wave: Money,
-    pub djamo: Money,
-    pub cash: Money,
+    pub accounts: Vec<OpeningAccount>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +69,7 @@ impl AccountBalances {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Inventory {
+    pub account_balances: Vec<AccountBalanceSnapshot>,
     pub id: String,
     pub kind: String,
     pub closed_at: String,
@@ -89,15 +87,13 @@ pub struct Inventory {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InventoryPreviewInput {
-    pub orange_money: Money,
-    pub wave: Money,
-    pub djamo: Money,
-    pub cash: Money,
+    pub balances: Vec<AccountBalanceInput>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InventoryPreview {
+    pub account_balances: Vec<AccountBalanceSnapshot>,
     pub balances: AccountBalances,
     pub previous_balances: AccountBalances,
     pub delta: AccountBalances,
@@ -111,10 +107,7 @@ pub struct InventoryPreview {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloseInventoryInput {
-    pub orange_money: Money,
-    pub wave: Money,
-    pub djamo: Money,
-    pub cash: Money,
+    pub balances: Vec<AccountBalanceInput>,
     pub variance_category: Option<String>,
     pub variance_note: Option<String>,
 }
@@ -133,13 +126,14 @@ pub struct InventoryCorrectionInput {
     pub inventory_id: String,
     pub amount: Money,
     pub direction: String,
-    pub payment_account: String,
+    pub account_id: String,
     pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JournalEntry {
+    pub account_snapshot: AccountSnapshot,
     pub id: String,
     pub entry_type: String,
     pub amount: Money,
@@ -158,7 +152,7 @@ pub struct JournalEntry {
 pub struct CreateJournalEntryInput {
     pub entry_type: String,
     pub amount: Money,
-    pub payment_account: String,
+    pub account_id: String,
     pub occurred_at: String,
     pub reference: Option<String>,
     pub note: Option<String>,
@@ -174,6 +168,7 @@ pub struct ReverseEntryInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Debt {
+    pub account_snapshot: AccountSnapshot,
     pub id: String,
     pub customer_name: String,
     pub phone: String,
@@ -191,6 +186,7 @@ pub struct Debt {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DebtPayment {
+    pub account_snapshot: AccountSnapshot,
     pub id: String,
     pub debt_id: String,
     pub amount: Money,
@@ -205,7 +201,7 @@ pub struct DebtPayment {
 pub struct CreateDebtInput {
     pub customer_name: String,
     pub phone: String,
-    pub provider: String,
+    pub account_id: String,
     pub amount: Money,
     pub issued_at: String,
     pub due_date: Option<String>,
@@ -217,7 +213,7 @@ pub struct CreateDebtInput {
 pub struct RecordPaymentInput {
     pub debt_id: String,
     pub amount: Money,
-    pub account: String,
+    pub account_id: String,
     pub paid_at: String,
     pub note: Option<String>,
 }
@@ -232,6 +228,7 @@ pub struct CancelDebtInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Dashboard {
+    pub accounts: Vec<Account>,
     pub settings: BusinessSettings,
     pub last_inventory: Inventory,
     pub expected_capital: Money,
@@ -308,4 +305,90 @@ pub struct RestoreInput {
     pub backup_path: String,
     pub recovery_password: String,
     pub new_pin: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSnapshot {
+    pub account_id: String,
+    pub provider: String,
+    pub name: String,
+    pub identifier: Option<String>,
+}
+
+impl AccountSnapshot {
+    pub fn display_name(&self) -> String {
+        let service = match self.provider.as_str() {
+            "orange_money" => "Orange Money",
+            "wave" => "Wave",
+            "djamo" => "Djamo",
+            "cash" => "Espèces",
+            other => other,
+        };
+        match &self.identifier {
+            Some(identifier) => format!("{} — {} ({})", service, self.name, identifier),
+            None => format!("{} — {}", service, self.name),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Account {
+    #[serde(flatten)]
+    pub snapshot: AccountSnapshot,
+    pub active: bool,
+    pub last_balance: Option<Money>,
+    pub last_measured_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAccountInput {
+    pub provider: String,
+    pub name: String,
+    pub identifier: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAccountInput {
+    pub account_id: String,
+    pub name: String,
+    pub identifier: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpeningAccount {
+    pub provider: String,
+    pub name: String,
+    pub identifier: Option<String>,
+    pub amount: Money,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountBalanceInput {
+    pub account_id: String,
+    pub amount: Money,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountBalanceSnapshot {
+    #[serde(flatten)]
+    pub account: AccountSnapshot,
+    pub amount: Money,
+    pub previous_amount: Option<Money>,
+    pub delta: Option<Money>,
+    pub legacy: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpeningPreview {
+    pub balances: AccountBalances,
+    pub liquidity: Money,
+    pub difference: Money,
 }

@@ -8,7 +8,8 @@ Application desktop locale de gestion d’un multiservices au Sénégal : invent
 - inventaires périodiques, comparaison par compte et justification des écarts ;
 - capital réel incluant les créances non soldées ;
 - recettes, commissions, apports, achats, dépenses et retraits de capital ;
-- dettes Orange Money/Wave avec échéances et remboursements partiels ;
+- plusieurs comptes/SIM Orange Money, Wave et Djamo, avec une caisse espèces unique ;
+- dettes Orange Money/Wave/Djamo avec échéances et remboursements partiels sur le compte choisi ;
 - contre-écritures et journal d’audit immuable ;
 - rapports PDF, Excel et CSV ;
 - base SQLite chiffrée par SQLCipher ;
@@ -20,11 +21,34 @@ Application desktop locale de gestion d’un multiservices au Sénégal : invent
 - `src/` : interface React 19 + TypeScript + Vite ;
 - `src-tauri/src/domain.rs` : validations et règles comptables ;
 - `src-tauri/src/db.rs` : schéma SQLite et transactions métier ;
+- `src-tauri/src/accounts.rs` : comptes, validations, soldes et variations ;
+- `src-tauri/src/migration_v2.sql` : migration transactionnelle multi-comptes ;
 - `src-tauri/src/security.rs` : enveloppes de clés et chiffrement ;
 - `src-tauri/src/backup.rs` : sauvegarde, rétention, contrôle et restauration ;
 - `src-tauri/src/export.rs` : exports PDF, XLSX et CSV.
 
 Toutes les écritures transitent par des commandes Tauri typées et sont validées en Rust. Le frontend n’accède jamais directement à la base.
+
+## Comptes et SIM
+
+À l’ouverture, un compte par service est proposé. Ajoutez les SIM nécessaires et répartissez le capital entre elles et la caisse. La somme doit être exactement égale au capital initial ; les montants sont des FCFA entiers positifs ou nuls.
+
+Ensuite, **Paramètres → Comptes et SIM** permet de créer, renommer, archiver et réactiver les comptes. Chaque compte a un nom obligatoire et un identifiant facultatif. Le nom est unique dans son service, sans distinction de casse, y compris parmi les comptes archivés. Le service et l’ID permanent ne changent jamais.
+
+- Un compte ajouté ne modifie aucun capital. Il affiche « Pas encore relevé » jusqu’au prochain inventaire, où son solde devient obligatoire.
+- Un transfert entre deux SIM change seulement la répartition. Ne l’enregistrez pas comme une recette. Un apport réel de capital doit en revanche être inscrit au journal.
+- Les inventaires demandent un solde pour chaque compte actif et affichent les sous-totaux par service. La variation du premier relevé d’un compte est indisponible, et non supposée nulle.
+- Pour archiver un compte utilisé, son dernier solde doit être nul et aucune opération ne doit avoir été enregistrée sur ce compte depuis. Un compte jamais utilisé peut être archivé directement. La caisse ne peut pas être archivée ni dupliquée.
+- Les anciennes dettes d’un compte archivé peuvent être remboursées sur une SIM active ou en espèces. Les contre-écritures gardent le compte et le libellé de l’écriture originale, même après archivage ou renommage.
+- L’historique et les exports conservent les noms et identifiants au moment des opérations. Dans les exports CSV, les lignes `solde_compte` détaillent les lignes `inventaire` : ne les additionnez pas ensemble. Dans Excel, la synthèse et les soldes détaillés sont dans des feuilles distinctes.
+
+## Mise à niveau des données et sauvegardes
+
+Le schéma SQLite passe de 1 à 2 au prochain déverrouillage. Avant tout changement, l’application crée et vérifie une sauvegarde chiffrée `avant-migration-v1-….msbackup` dans son dossier de sauvegardes. Si cette étape échoue, la migration s’arrête et les données restent en version 1.
+
+La migration crée les comptes Orange Money — Principal, Wave — Principal, Djamo — Principal et Espèces. Les montants, dates, références, corrections et écarts restent inchangés. Les anciens soldes sont explicitement marqués « historique regroupé par service » : aucune répartition ancienne entre SIM n’est inventée. La migration est atomique, auditée et ne s’exécute qu’une fois.
+
+Les sauvegardes version 2 contiennent tous les comptes, y compris archivés, leurs relevés et leurs libellés historiques. Une sauvegarde version 1 est déchiffrée, contrôlée puis migrée dans une copie temporaire avant de remplacer les données actives. Un mot de passe incorrect ou une migration invalide interrompt la restauration. Ne rouvrez pas une base version 2 avec l’ancienne application ; conservez une copie externe de la sauvegarde préalable.
 
 ## Développement
 
@@ -92,7 +116,7 @@ Au premier démarrage, le gérant choisit :
 
 Le mot de passe de récupération doit être conservé hors du PC. Il est indispensable pour restaurer une sauvegarde sur un autre ordinateur. Kër Finance ne possède aucun serveur capable de le récupérer.
 
-## Limites de la V1
+## Limites actuelles
 
 - un seul PC, une seule boutique et un seul profil gérant ;
 - pas de synchronisation cloud ;

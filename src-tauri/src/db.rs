@@ -6,15 +6,16 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
+    accounts,
     domain::{
         clean_optional, clean_required, signed_journal_amount, validate_balances,
-        validate_debt_provider, validate_payment_account, validate_variance_explanation,
+        validate_debt_provider, validate_variance_explanation,
     },
     error::{AppError, AppResult},
     models::*,
 };
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 pub fn open_database(path: &Path, database_key: &[u8]) -> AppResult<Connection> {
     let connection = Connection::open(path)?;
@@ -30,7 +31,64 @@ pub fn open_database(path: &Path, database_key: &[u8]) -> AppResult<Connection> 
     Ok(connection)
 }
 
+pub fn schema_version(connection: &Connection) -> AppResult<i64> {
+    Ok(connection.query_row("PRAGMA user_version", [], |row| row.get(0))?)
+}
+
 pub fn migrate(connection: &Connection) -> AppResult<()> {
+    let version = schema_version(connection)?;
+    if version > SCHEMA_VERSION {
+        return Err(AppError::Validation(
+            "La base nécessite une version plus récente de l’application.".into(),
+        ));
+    }
+    if version == SCHEMA_VERSION {
+        return Ok(());
+    }
+    // SQLite requires foreign keys off outside the transaction to rebuild debts.
+    connection.pragma_update(None, "foreign_keys", false)?;
+    let result = (|| {
+        let tx = connection.unchecked_transaction()?;
+        if version == 0 {
+            migrate_v1(&tx)?;
+        }
+        let debt_count: i64 = tx.query_row("SELECT count(*) FROM debts", [], |r| r.get(0))?;
+        let inventory_count: i64 =
+            tx.query_row("SELECT count(*) FROM inventories", [], |r| r.get(0))?;
+        tx.execute_batch(include_str!("migration_v2.sql"))?;
+        let migrated_debts: i64 = tx.query_row("SELECT count(*) FROM debts", [], |r| r.get(0))?;
+        let migrated_balances: i64 =
+            tx.query_row("SELECT count(*) FROM inventory_account_balances", [], |r| {
+                r.get(0)
+            })?;
+        if debt_count != migrated_debts || migrated_balances != inventory_count * 4 {
+            return Err(AppError::Validation(
+                "Migration interrompue : données historiques incomplètes.".into(),
+            ));
+        }
+        let broken = tx.prepare("PRAGMA foreign_key_check")?.exists([])?;
+        if broken {
+            return Err(AppError::Validation(
+                "Migration interrompue : références invalides.".into(),
+            ));
+        }
+        if version == 1 {
+            audit_tx(
+                &tx,
+                "schema_migrated",
+                "business",
+                Some("1"),
+                json!({"from":1,"to":2}),
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    })();
+    connection.pragma_update(None, "foreign_keys", true)?;
+    result
+}
+
+fn migrate_v1(connection: &Connection) -> AppResult<()> {
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS business_settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -129,7 +187,7 @@ fn validate_date(value: &str, label: &str) -> AppResult<String> {
     Ok(value.to_string())
 }
 
-fn audit_tx(
+pub(crate) fn audit_tx(
     tx: &Transaction<'_>,
     action: &str,
     entity_type: &str,
@@ -151,13 +209,10 @@ fn audit_tx(
     Ok(())
 }
 
-pub fn initialize_business(
-    connection: &mut Connection,
-    input: &SetupInput,
-    balances: &AccountBalances,
-) -> AppResult<()> {
+pub fn initialize_business(connection: &mut Connection, input: &SetupInput) -> AppResult<()> {
     let business_name = clean_required(&input.business_name, "Le nom de la boutique", 2)?;
-    let liquidity = validate_balances(balances)?;
+    let balances = accounts::validate_opening(input)?;
+    let liquidity = validate_balances(&balances)?;
     let timestamp = now();
     let inventory_id = Uuid::new_v4().to_string();
     let tx = connection.transaction()?;
@@ -182,6 +237,26 @@ pub fn initialize_business(
             liquidity
         ],
     )?;
+    let mut details = Vec::new();
+    for draft in &input.accounts {
+        let account = accounts::insert(
+            &tx,
+            CreateAccountInput {
+                provider: draft.provider.clone(),
+                name: draft.name.clone(),
+                identifier: draft.identifier.clone(),
+            },
+            true,
+        )?;
+        details.push(AccountBalanceSnapshot {
+            account,
+            amount: draft.amount,
+            previous_amount: None,
+            delta: None,
+            legacy: false,
+        });
+    }
+    accounts::save_balances(&tx, &inventory_id, &details)?;
     audit_tx(
         &tx,
         "business_initialized",
@@ -300,7 +375,7 @@ fn load_inventory_rows(connection: &Connection) -> AppResult<Vec<InventoryRow>> 
     let mut statement = connection.prepare(
         "SELECT id, kind, closed_at, orange_money, wave, djamo, cash, receivables,
                 liquidity, expected_total, actual_total, variance, variance_category, variance_note
-         FROM inventories ORDER BY closed_at ASC",
+         FROM inventories ORDER BY closed_at ASC, rowid ASC",
     )?;
     let rows = statement
         .query_map([], map_inventory_row)?
@@ -313,6 +388,7 @@ fn to_inventory(row: &InventoryRow, previous: Option<&InventoryRow>) -> Inventor
         .map(|v| v.balances.clone())
         .unwrap_or_else(|| row.balances.clone());
     Inventory {
+        account_balances: Vec::new(),
         id: row.id.clone(),
         kind: row.kind.clone(),
         closed_at: row.closed_at.clone(),
@@ -350,6 +426,9 @@ pub fn list_inventories(
         .map(|(index, row)| to_inventory(row, index.checked_sub(1).map(|i| &rows[i])))
         .filter(|item| filters.is_none_or(|f| date_in_filter(&item.closed_at, f)))
         .collect();
+    for item in &mut items {
+        item.account_balances = accounts::inventory_balances(connection, &item.id)?;
+    }
     items.reverse();
     Ok(items)
 }
@@ -359,7 +438,7 @@ fn last_inventory_row(connection: &Connection) -> AppResult<InventoryRow> {
         .query_row(
             "SELECT id, kind, closed_at, orange_money, wave, djamo, cash, receivables,
                     liquidity, expected_total, actual_total, variance, variance_category, variance_note
-             FROM inventories ORDER BY closed_at DESC LIMIT 1",
+             FROM inventories ORDER BY closed_at DESC, rowid DESC LIMIT 1",
             [],
             map_inventory_row,
         )
@@ -370,7 +449,9 @@ pub fn last_inventory(connection: &Connection) -> AppResult<Inventory> {
     let all = load_inventory_rows(connection)?;
     let last = all.last().ok_or(AppError::NotFound)?;
     let previous = all.len().checked_sub(2).map(|index| &all[index]);
-    Ok(to_inventory(last, previous))
+    let mut item = to_inventory(last, previous);
+    item.account_balances = accounts::inventory_balances(connection, &item.id)?;
+    Ok(item)
 }
 
 pub fn open_receivables(connection: &Connection) -> AppResult<Money> {
@@ -397,12 +478,7 @@ pub fn preview_inventory(
     connection: &Connection,
     input: InventoryPreviewInput,
 ) -> AppResult<InventoryPreview> {
-    let balances = AccountBalances {
-        orange_money: input.orange_money,
-        wave: input.wave,
-        djamo: input.djamo,
-        cash: input.cash,
-    };
+    let (balances, account_balances) = accounts::preview(connection, &input.balances)?;
     let liquidity = validate_balances(&balances)?;
     let previous = last_inventory_row(connection)?;
     let receivables = open_receivables(connection)?;
@@ -416,6 +492,7 @@ pub fn preview_inventory(
         AppError::Validation("Le capital réel dépasse la limite autorisée.".into())
     })?;
     Ok(InventoryPreview {
+        account_balances,
         balances: balances.clone(),
         previous_balances: previous.balances.clone(),
         delta: AccountBalances {
@@ -436,13 +513,11 @@ pub fn close_inventory(
     connection: &mut Connection,
     input: CloseInventoryInput,
 ) -> AppResult<Inventory> {
+    let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let preview = preview_inventory(
-        connection,
+        &tx,
         InventoryPreviewInput {
-            orange_money: input.orange_money,
-            wave: input.wave,
-            djamo: input.djamo,
-            cash: input.cash,
+            balances: input.balances,
         },
     )?;
     validate_variance_explanation(
@@ -462,7 +537,6 @@ pub fn close_inventory(
     };
     let id = Uuid::new_v4().to_string();
     let timestamp = now();
-    let tx = connection.transaction()?;
     tx.execute(
         "INSERT INTO inventories
          (id, kind, closed_at, orange_money, wave, djamo, cash, receivables, liquidity,
@@ -484,6 +558,7 @@ pub fn close_inventory(
             note
         ],
     )?;
+    accounts::save_balances(&tx, &id, &preview.account_balances)?;
     audit_tx(
         &tx,
         "inventory_closed",
@@ -505,14 +580,15 @@ pub fn create_inventory_correction(
     connection: &mut Connection,
     input: InventoryCorrectionInput,
 ) -> AppResult<JournalEntry> {
+    let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if input.amount <= 0 {
         return Err(AppError::Validation(
             "Le montant de correction doit être supérieur à zéro.".into(),
         ));
     }
-    validate_payment_account(&input.payment_account)?;
+    let account = accounts::get(&tx, &input.account_id, true)?.snapshot;
     let reason = clean_required(&input.reason, "Le motif de correction", 3)?;
-    let exists: bool = connection.query_row(
+    let exists: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM inventories WHERE id = ?1)",
         [&input.inventory_id],
         |row| row.get(0),
@@ -536,20 +612,20 @@ pub fn create_inventory_correction(
     let timestamp = now();
     let occurred_at = Utc::now().date_naive().format("%Y-%m-%d").to_string();
     let reference = format!("inventory:{}", input.inventory_id);
-    let tx = connection.transaction()?;
     tx.execute(
         "INSERT INTO journal_entries
-         (id, entry_type, amount, signed_amount, payment_account, occurred_at, posted_at, reference, note, reverses_id)
-         VALUES (?1, 'inventory_correction', ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL)",
+         (id, entry_type, amount, signed_amount, payment_account, occurred_at, posted_at, reference, note, reverses_id, account_id, account_name, account_identifier)
+         VALUES (?1, 'inventory_correction', ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11)",
         params![
             id,
             input.amount,
             signed_amount,
-            input.payment_account,
+            account.provider,
             occurred_at,
             timestamp,
             reference,
-            reason
+            reason,
+            account.account_id, account.name, account.identifier
         ],
     )?;
     audit_tx(
@@ -568,7 +644,7 @@ pub fn create_inventory_correction(
     connection
         .query_row(
             "SELECT j.id, j.entry_type, j.amount, j.signed_amount, j.payment_account,
-                    j.occurred_at, j.posted_at, j.reference, j.note, j.reverses_id, 0
+                    j.occurred_at, j.posted_at, j.reference, j.note, j.reverses_id, 0, j.account_id, j.account_name, j.account_identifier
              FROM journal_entries j WHERE j.id = ?1",
             [&id],
             map_journal_row,
@@ -578,6 +654,12 @@ pub fn create_inventory_correction(
 
 fn map_journal_row(row: &Row<'_>) -> rusqlite::Result<JournalEntry> {
     Ok(JournalEntry {
+        account_snapshot: AccountSnapshot {
+            account_id: row.get(11)?,
+            provider: row.get(4)?,
+            name: row.get(12)?,
+            identifier: row.get(13)?,
+        },
         id: row.get(0)?,
         entry_type: row.get(1)?,
         amount: row.get(2)?,
@@ -599,7 +681,7 @@ pub fn list_journal_entries(
     let mut statement = connection.prepare(
         "SELECT j.id, j.entry_type, j.amount, j.signed_amount, j.payment_account,
                 j.occurred_at, j.posted_at, j.reference, j.note, j.reverses_id,
-                EXISTS(SELECT 1 FROM journal_entries r WHERE r.reverses_id = j.id) AS reversed
+                EXISTS(SELECT 1 FROM journal_entries r WHERE r.reverses_id = j.id) AS reversed, j.account_id, j.account_name, j.account_identifier
          FROM journal_entries j ORDER BY j.occurred_at DESC, j.posted_at DESC",
     )?;
     let entries = statement
@@ -615,28 +697,29 @@ pub fn create_journal_entry(
     connection: &mut Connection,
     input: CreateJournalEntryInput,
 ) -> AppResult<JournalEntry> {
+    let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let signed_amount = signed_journal_amount(&input.entry_type, input.amount)?;
-    validate_payment_account(&input.payment_account)?;
+    let account = accounts::get(&tx, &input.account_id, true)?.snapshot;
     let occurred_at = validate_date(&input.occurred_at, "La date")?;
     let reference = clean_optional(input.reference);
     let note = clean_optional(input.note);
     let id = Uuid::new_v4().to_string();
     let posted_at = now();
-    let tx = connection.transaction()?;
     tx.execute(
         "INSERT INTO journal_entries
-         (id, entry_type, amount, signed_amount, payment_account, occurred_at, posted_at, reference, note, reverses_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)",
+         (id, entry_type, amount, signed_amount, payment_account, occurred_at, posted_at, reference, note, reverses_id, account_id, account_name, account_identifier)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11, ?12)",
         params![
             id,
             input.entry_type,
             input.amount,
             signed_amount,
-            input.payment_account,
+            account.provider,
             occurred_at,
             posted_at,
             reference,
-            note
+            note,
+            account.account_id, account.name, account.identifier
         ],
     )?;
     audit_tx(
@@ -648,14 +731,14 @@ pub fn create_journal_entry(
             "entryType": input.entry_type,
             "amount": input.amount,
             "signedAmount": signed_amount,
-            "paymentAccount": input.payment_account
+            "account": account
         }),
     )?;
     tx.commit()?;
     connection
         .query_row(
             "SELECT j.id, j.entry_type, j.amount, j.signed_amount, j.payment_account,
-                    j.occurred_at, j.posted_at, j.reference, j.note, j.reverses_id, 0
+                    j.occurred_at, j.posted_at, j.reference, j.note, j.reverses_id, 0, j.account_id, j.account_name, j.account_identifier
              FROM journal_entries j WHERE j.id = ?1",
             [&id],
             map_journal_row,
@@ -667,12 +750,13 @@ pub fn reverse_journal_entry(
     connection: &mut Connection,
     input: ReverseEntryInput,
 ) -> AppResult<JournalEntry> {
+    let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let reason = clean_required(&input.reason, "Le motif", 3)?;
-    let original: JournalEntry = connection
+    let original: JournalEntry = tx
         .query_row(
             "SELECT j.id, j.entry_type, j.amount, j.signed_amount, j.payment_account,
                     j.occurred_at, j.posted_at, j.reference, j.note, j.reverses_id,
-                    EXISTS(SELECT 1 FROM journal_entries r WHERE r.reverses_id = j.id)
+                    EXISTS(SELECT 1 FROM journal_entries r WHERE r.reverses_id = j.id), j.account_id, j.account_name, j.account_identifier
              FROM journal_entries j WHERE j.id = ?1",
             [&input.entry_id],
             map_journal_row,
@@ -690,11 +774,10 @@ pub fn reverse_journal_entry(
         .ok_or_else(|| AppError::Validation("Montant de correction invalide.".into()))?;
     let id = Uuid::new_v4().to_string();
     let timestamp = now();
-    let tx = connection.transaction()?;
     tx.execute(
         "INSERT INTO journal_entries
-         (id, entry_type, amount, signed_amount, payment_account, occurred_at, posted_at, reference, note, reverses_id)
-         VALUES (?1, 'reversal', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+         (id, entry_type, amount, signed_amount, payment_account, occurred_at, posted_at, reference, note, reverses_id, account_id, account_name, account_identifier)
+         VALUES (?1, 'reversal', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             id,
             original.amount,
@@ -704,7 +787,8 @@ pub fn reverse_journal_entry(
             timestamp,
             format!("Correction {}", original.id),
             reason,
-            original.id
+            original.id,
+            original.account_snapshot.account_id, original.account_snapshot.name, original.account_snapshot.identifier
         ],
     )?;
     audit_tx(
@@ -718,7 +802,7 @@ pub fn reverse_journal_entry(
     connection
         .query_row(
             "SELECT j.id, j.entry_type, j.amount, j.signed_amount, j.payment_account,
-                    j.occurred_at, j.posted_at, j.reference, j.note, j.reverses_id, 0
+                    j.occurred_at, j.posted_at, j.reference, j.note, j.reverses_id, 0, j.account_id, j.account_name, j.account_identifier
              FROM journal_entries j WHERE j.id = ?1",
             [&id],
             map_journal_row,
@@ -728,12 +812,18 @@ pub fn reverse_journal_entry(
 
 fn payment_for_debt(connection: &Connection, debt_id: &str) -> AppResult<Vec<DebtPayment>> {
     let mut statement = connection.prepare(
-        "SELECT id, debt_id, amount, account, paid_at, note, created_at
+        "SELECT id, debt_id, amount, account, paid_at, note, created_at, account_id, account_name, account_identifier
          FROM debt_payments WHERE debt_id = ?1 ORDER BY paid_at DESC, created_at DESC",
     )?;
     let values = statement
         .query_map([debt_id], |row| {
             Ok(DebtPayment {
+                account_snapshot: AccountSnapshot {
+                    account_id: row.get(7)?,
+                    provider: row.get(3)?,
+                    name: row.get(8)?,
+                    identifier: row.get(9)?,
+                },
                 id: row.get(0)?,
                 debt_id: row.get(1)?,
                 amount: row.get(2)?,
@@ -775,7 +865,7 @@ pub fn list_debts(
 ) -> AppResult<Vec<Debt>> {
     let mut statement = connection.prepare(
         "SELECT id, customer_name, phone, provider, principal, remaining, issued_at,
-                due_date, note, status, created_at
+                due_date, note, status, created_at, account_id, account_name, account_identifier
          FROM debts ORDER BY
            CASE status WHEN 'open' THEN 0 WHEN 'partial' THEN 1 WHEN 'paid' THEN 2 ELSE 3 END,
            COALESCE(due_date, '9999-12-31'), issued_at DESC",
@@ -794,6 +884,12 @@ pub fn list_debts(
                 row.get::<_, Option<String>>(8)?,
                 row.get::<_, String>(9)?,
                 row.get::<_, String>(10)?,
+                AccountSnapshot {
+                    account_id: row.get(11)?,
+                    provider: row.get(3)?,
+                    name: row.get(12)?,
+                    identifier: row.get(13)?,
+                },
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -811,12 +907,14 @@ pub fn list_debts(
         note,
         base_status,
         created_at,
+        account_snapshot,
     ) in raw
     {
         if filters.is_some_and(|f| !date_in_filter(&issued_at, f)) {
             continue;
         }
         debts.push(Debt {
+            account_snapshot,
             payments: payment_for_debt(connection, &id)?,
             status: display_debt_status(&base_status, remaining, due_date.as_deref(), today),
             id,
@@ -835,9 +933,11 @@ pub fn list_debts(
 }
 
 pub fn create_debt(connection: &mut Connection, input: CreateDebtInput) -> AppResult<Debt> {
+    let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let customer_name = clean_required(&input.customer_name, "Le nom du client", 2)?;
     let phone = clean_required(&input.phone, "Le téléphone", 6)?;
-    validate_debt_provider(&input.provider)?;
+    let account = accounts::get(&tx, &input.account_id, true)?.snapshot;
+    validate_debt_provider(&account.provider)?;
     if input.amount <= 0 {
         return Err(AppError::Validation(
             "Le montant de la dette doit être supérieur à zéro.".into(),
@@ -859,21 +959,21 @@ pub fn create_debt(connection: &mut Connection, input: CreateDebtInput) -> AppRe
     let note = clean_optional(input.note);
     let id = Uuid::new_v4().to_string();
     let created_at = now();
-    let tx = connection.transaction()?;
     tx.execute(
         "INSERT INTO debts
-         (id, customer_name, phone, provider, principal, remaining, issued_at, due_date, note, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, ?8, 'open', ?9)",
+         (id, customer_name, phone, provider, principal, remaining, issued_at, due_date, note, status, created_at, account_id, account_name, account_identifier)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7, ?8, 'open', ?9, ?10, ?11, ?12)",
         params![
             id,
             customer_name,
             phone,
-            input.provider,
+            account.provider,
             input.amount,
             issued_at,
             due_date,
             note,
-            created_at
+            created_at,
+            account.account_id, account.name, account.identifier
         ],
     )?;
     audit_tx(
@@ -884,7 +984,7 @@ pub fn create_debt(connection: &mut Connection, input: CreateDebtInput) -> AppRe
         json!({
             "customerName": customer_name,
             "phone": phone,
-            "provider": input.provider,
+            "account": account,
             "amount": input.amount,
             "dueDate": due_date
         }),
@@ -900,15 +1000,16 @@ pub fn record_debt_payment(
     connection: &mut Connection,
     input: RecordPaymentInput,
 ) -> AppResult<Debt> {
+    let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if input.amount <= 0 {
         return Err(AppError::Validation(
             "Le remboursement doit être supérieur à zéro.".into(),
         ));
     }
-    validate_payment_account(&input.account)?;
+    let account = accounts::get(&tx, &input.account_id, true)?.snapshot;
     let paid_at = validate_date(&input.paid_at, "La date du remboursement")?;
     let note = clean_optional(input.note);
-    let current: (Money, String) = connection
+    let current: (Money, String) = tx
         .query_row(
             "SELECT remaining, status FROM debts WHERE id = ?1",
             [&input.debt_id],
@@ -931,18 +1032,18 @@ pub fn record_debt_payment(
     let status = if remaining == 0 { "paid" } else { "partial" };
     let payment_id = Uuid::new_v4().to_string();
     let created_at = now();
-    let tx = connection.transaction()?;
     tx.execute(
-        "INSERT INTO debt_payments (id, debt_id, amount, account, paid_at, note, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO debt_payments (id, debt_id, amount, account, paid_at, note, created_at, account_id, account_name, account_identifier)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             payment_id,
             input.debt_id,
             input.amount,
-            input.account,
+            account.provider,
             paid_at,
             note,
-            created_at
+            created_at,
+            account.account_id, account.name, account.identifier
         ],
     )?;
     tx.execute(
@@ -958,7 +1059,7 @@ pub fn record_debt_payment(
             "paymentId": payment_id,
             "amount": input.amount,
             "remaining": remaining,
-            "account": input.account
+            "account": account
         }),
     )?;
     tx.commit()?;
@@ -969,8 +1070,9 @@ pub fn record_debt_payment(
 }
 
 pub fn cancel_debt(connection: &mut Connection, input: CancelDebtInput) -> AppResult<Debt> {
+    let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let reason = clean_required(&input.reason, "Le motif d’annulation", 3)?;
-    let status: String = connection
+    let status: String = tx
         .query_row(
             "SELECT status FROM debts WHERE id = ?1",
             [&input.debt_id],
@@ -981,7 +1083,6 @@ pub fn cancel_debt(connection: &mut Connection, input: CancelDebtInput) -> AppRe
     if status == "cancelled" {
         return Err(AppError::Validation("Cette dette est déjà annulée.".into()));
     }
-    let tx = connection.transaction()?;
     tx.execute(
         "UPDATE debts SET remaining = 0, status = 'cancelled', cancellation_reason = ?1 WHERE id = ?2",
         params![reason, input.debt_id],
@@ -1022,6 +1123,7 @@ pub fn get_dashboard(connection: &Connection) -> AppResult<Dashboard> {
         .with_timezone(&Utc);
     let next = closed_at + Duration::minutes(settings.inventory_interval_minutes);
     Ok(Dashboard {
+        accounts: accounts::list(connection)?,
         settings,
         expected_capital,
         last_actual_capital: last_inventory.actual_total,
@@ -1097,12 +1199,21 @@ pub fn get_report(connection: &Connection, filters: ReportFilters) -> AppResult<
 
 pub fn integrity_check(connection: &Connection) -> AppResult<()> {
     let result: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-    if result == "ok" {
+    let invalid_references = connection.prepare("PRAGMA foreign_key_check")?.exists([])?;
+    if result == "ok" && !invalid_references {
         Ok(())
     } else {
         Err(AppError::Database(rusqlite::Error::InvalidQuery))
     }
 }
+
+#[cfg(test)]
+#[path = "test_support.rs"]
+pub(crate) mod test_support;
+
+#[cfg(test)]
+#[path = "account_tests.rs"]
+mod account_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1117,36 +1228,64 @@ mod tests {
         connection
     }
 
+    fn opening_accounts() -> Vec<OpeningAccount> {
+        [
+            ("orange_money", 1_500_000),
+            ("wave", 1_200_000),
+            ("djamo", 800_000),
+            ("cash", 1_500_000),
+        ]
+        .into_iter()
+        .map(|(provider, amount)| OpeningAccount {
+            provider: provider.into(),
+            name: provider.into(),
+            identifier: None,
+            amount,
+        })
+        .collect()
+    }
+
+    fn balances_for(accounts: &[Account], amounts: [Money; 4]) -> Vec<AccountBalanceInput> {
+        accounts
+            .iter()
+            .filter(|a| a.active)
+            .map(|a| {
+                let index = match a.snapshot.provider.as_str() {
+                    "orange_money" => 0,
+                    "wave" => 1,
+                    "djamo" => 2,
+                    _ => 3,
+                };
+                AccountBalanceInput {
+                    account_id: a.snapshot.account_id.clone(),
+                    amount: amounts[index],
+                }
+            })
+            .collect()
+    }
+
     fn setup(connection: &mut Connection) {
         let input = SetupInput {
             business_name: "Boutique test".into(),
             pin: "123456".into(),
             recovery_password: "mot de passe de récupération".into(),
             initial_capital: 5_000_000,
-            orange_money: 1_500_000,
-            wave: 1_200_000,
-            djamo: 800_000,
-            cash: 1_500_000,
+            accounts: opening_accounts(),
         };
-        let balances = AccountBalances {
-            orange_money: input.orange_money,
-            wave: input.wave,
-            djamo: input.djamo,
-            cash: input.cash,
-        };
-        initialize_business(connection, &input, &balances).unwrap();
+        initialize_business(connection, &input).unwrap();
     }
 
     #[test]
     fn journal_updates_expected_capital() {
         let mut connection = test_db();
         setup(&mut connection);
+        let cash = test_support::id(&connection, "cash");
         create_journal_entry(
             &mut connection,
             CreateJournalEntryInput {
                 entry_type: "sale".into(),
                 amount: 100_000,
-                payment_account: "cash".into(),
+                account_id: cash.clone(),
                 occurred_at: "2026-08-26".into(),
                 reference: None,
                 note: None,
@@ -1158,7 +1297,7 @@ mod tests {
             CreateJournalEntryInput {
                 entry_type: "expense".into(),
                 amount: 30_000,
-                payment_account: "cash".into(),
+                account_id: cash.clone(),
                 occurred_at: "2026-08-26".into(),
                 reference: None,
                 note: None,
@@ -1175,12 +1314,14 @@ mod tests {
     fn debt_and_partial_payment_preserve_receivable_logic() {
         let mut connection = test_db();
         setup(&mut connection);
+        let cash = test_support::id(&connection, "cash");
+        let wave = test_support::id(&connection, "wave");
         let debt = create_debt(
             &mut connection,
             CreateDebtInput {
                 customer_name: "Awa Ndiaye".into(),
                 phone: "771234567".into(),
-                provider: "wave".into(),
+                account_id: wave.clone(),
                 amount: 50_000,
                 issued_at: "2026-08-26".into(),
                 // Les échéances sont testées séparément avec une date contrôlée.
@@ -1196,7 +1337,7 @@ mod tests {
             RecordPaymentInput {
                 debt_id: debt.id,
                 amount: 20_000,
-                account: "cash".into(),
+                account_id: cash.clone(),
                 paid_at: "2026-08-27".into(),
                 note: None,
             },
@@ -1251,12 +1392,14 @@ mod tests {
     fn overpayment_is_rejected() {
         let mut connection = test_db();
         setup(&mut connection);
+        let cash = test_support::id(&connection, "cash");
+        let orange = test_support::id(&connection, "orange_money");
         let debt = create_debt(
             &mut connection,
             CreateDebtInput {
                 customer_name: "Moussa Fall".into(),
                 phone: "781234567".into(),
-                provider: "orange_money".into(),
+                account_id: orange.clone(),
                 amount: 10_000,
                 issued_at: "2026-08-26".into(),
                 due_date: None,
@@ -1269,7 +1412,7 @@ mod tests {
             RecordPaymentInput {
                 debt_id: debt.id,
                 amount: 10_001,
-                account: "cash".into(),
+                account_id: cash.clone(),
                 paid_at: "2026-08-27".into(),
                 note: None,
             }
@@ -1281,13 +1424,11 @@ mod tests {
     fn non_zero_inventory_variance_requires_explanation_and_becomes_baseline() {
         let mut connection = test_db();
         setup(&mut connection);
+        let account_list = accounts::list(&connection).unwrap();
         let invalid = close_inventory(
             &mut connection,
             CloseInventoryInput {
-                orange_money: 1_510_000,
-                wave: 1_200_000,
-                djamo: 800_000,
-                cash: 1_500_000,
+                balances: balances_for(&account_list, [1_510_000, 1_200_000, 800_000, 1_500_000]),
                 variance_category: None,
                 variance_note: None,
             },
@@ -1296,10 +1437,7 @@ mod tests {
         let closed = close_inventory(
             &mut connection,
             CloseInventoryInput {
-                orange_money: 1_510_000,
-                wave: 1_200_000,
-                djamo: 800_000,
-                cash: 1_500_000,
+                balances: balances_for(&account_list, [1_510_000, 1_200_000, 800_000, 1_500_000]),
                 variance_category: Some("commission_mobile".into()),
                 variance_note: Some("Commissions de la période".into()),
             },
@@ -1316,6 +1454,7 @@ mod tests {
     fn inventory_correction_is_linked_and_updates_expected_capital() {
         let mut connection = test_db();
         setup(&mut connection);
+        let cash = test_support::id(&connection, "cash");
         let inventory = last_inventory(&connection).unwrap();
         let entry = create_inventory_correction(
             &mut connection,
@@ -1323,7 +1462,7 @@ mod tests {
                 inventory_id: inventory.id.clone(),
                 amount: 25_000,
                 direction: "decrease".into(),
-                payment_account: "cash".into(),
+                account_id: cash.clone(),
                 reason: "Correction d’un comptage erroné".into(),
             },
         )

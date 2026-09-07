@@ -10,10 +10,7 @@ export interface SetupInput {
   pin: string;
   recoveryPassword: string;
   initialCapital: Money;
-  orangeMoney: Money;
-  wave: Money;
-  djamo: Money;
-  cash: Money;
+  accounts: OpeningAccount[];
 }
 
 export interface BusinessSettings {
@@ -33,6 +30,7 @@ export interface AccountBalances {
 }
 
 export interface Inventory {
+  accountBalances: AccountBalanceSnapshot[];
   id: string;
   kind: "opening" | "regular";
   closedAt: string;
@@ -48,6 +46,7 @@ export interface Inventory {
 }
 
 export interface InventoryPreview {
+  accountBalances: AccountBalanceSnapshot[];
   balances: AccountBalances;
   previousBalances: AccountBalances;
   delta: AccountBalances;
@@ -65,6 +64,7 @@ export interface CloseInventoryResult {
 }
 
 export interface JournalEntry {
+  accountSnapshot: AccountSnapshot;
   id: string;
   entryType: string;
   amount: Money;
@@ -79,6 +79,7 @@ export interface JournalEntry {
 }
 
 export interface DebtPayment {
+  accountSnapshot: AccountSnapshot;
   id: string;
   debtId: string;
   amount: Money;
@@ -89,10 +90,11 @@ export interface DebtPayment {
 }
 
 export interface Debt {
+  accountSnapshot: AccountSnapshot;
   id: string;
   customerName: string;
   phone: string;
-  provider: "orange_money" | "wave";
+  provider: MobileProvider;
   principal: Money;
   remaining: Money;
   issuedAt: string;
@@ -104,6 +106,7 @@ export interface Debt {
 }
 
 export interface Dashboard {
+  accounts: Account[];
   settings: BusinessSettings;
   lastInventory: Inventory;
   expectedCapital: Money;
@@ -156,3 +159,38 @@ export type PageId =
   | "debts"
   | "reports"
   | "settings";
+
+export type MobileProvider = "orange_money" | "wave" | "djamo";
+export type Provider = MobileProvider | "cash";
+export interface AccountSnapshot {
+  accountId: string;
+  provider: Provider;
+  name: string;
+  identifier?: string | null;
+}
+export interface Account extends AccountSnapshot {
+  active: boolean;
+  lastBalance?: Money | null;
+  lastMeasuredAt?: string | null;
+}
+export interface AccountBalanceSnapshot extends AccountSnapshot {
+  amount: Money;
+  previousAmount?: Money | null;
+  delta?: Money | null;
+  legacy: boolean;
+}
+export interface AccountBalanceInput { accountId: string; amount: Money }
+export interface OpeningAccount {
+  provider: Provider;
+  name: string;
+  identifier?: string | null;
+  amount: Money;
+}
+export interface CreateAccountInput { provider: MobileProvider; name: string; identifier?: string | null }
+export interface UpdateAccountInput { accountId: string; name: string; identifier?: string | null }
+export interface OpeningPreview { balances: AccountBalances; liquidity: Money; difference: Money }
+export interface CloseInventoryInput { balances: AccountBalanceInput[]; varianceCategory?: string | null; varianceNote?: string | null }
+export interface InventoryCorrectionInput { inventoryId: string; amount: Money; direction: string; accountId: string; reason: string }
+export interface CreateJournalEntryInput { entryType: string; amount: Money; accountId: string; occurredAt: string; reference?: string | null; note?: string | null }
+export interface CreateDebtInput { customerName: string; phone: string; accountId: string; amount: Money; issuedAt: string; dueDate?: string | null; note?: string | null }
+export interface RecordPaymentInput { debtId: string; amount: Money; accountId: string; paidAt: string; note?: string | null }

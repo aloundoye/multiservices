@@ -6,7 +6,7 @@ use crate::{
 pub const POSITIVE_ENTRY_TYPES: &[&str] = &["sale", "commission", "capital_contribution"];
 pub const NEGATIVE_ENTRY_TYPES: &[&str] = &["purchase", "expense", "capital_withdrawal"];
 pub const PAYMENT_ACCOUNTS: &[&str] = &["cash", "orange_money", "wave", "djamo"];
-pub const DEBT_PROVIDERS: &[&str] = &["orange_money", "wave"];
+pub const DEBT_PROVIDERS: &[&str] = &["orange_money", "wave", "djamo"];
 pub const VARIANCE_CATEGORIES: &[&str] = &[
     "commission_mobile",
     "surplus_caisse",
@@ -77,7 +77,7 @@ pub fn validate_debt_provider(value: &str) -> AppResult<()> {
         Ok(())
     } else {
         Err(AppError::Validation(
-            "Une dette doit provenir d’Orange Money ou de Wave.".into(),
+            "Une dette doit provenir d’Orange Money, Wave ou Djamo.".into(),
         ))
     }
 }

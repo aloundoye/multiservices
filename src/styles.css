@@ -232,3 +232,26 @@ p { color: var(--muted); line-height: 1.55; }
   .setup-page { grid-template-columns: 1fr; }
   .setup-aside { display: none; }
 }
+
+/* Account-level views keep service totals visible as the number of SIMs grows. */
+.sim-editor { display: grid; gap: 16px; margin-top: 24px; }
+.sim-editor-row { border: 1px solid var(--border, #e0e8e3); border-radius: 12px; padding: 16px; background: #fff; }
+.sim-editor-row .text-button { margin-top: 10px; }
+.inventory-service h3 { display: flex; justify-content: space-between; gap: 16px; margin: 0 0 16px; font-size: 16px; }
+.inventory-service .inventory-account { margin-bottom: 12px; }
+.inventory-service { min-width: 0; }
+.service-detail { padding: 12px 0; border-top: 1px solid #e4ebe6; }
+.service-detail summary { cursor: pointer; color: #395c4e; font-weight: 600; }
+.service-detail .read-only-row { padding: 12px; gap: 16px; }
+.read-only-row small { display: block; font-size: 11px; color: #75867e; margin-top: 5px; }
+.inventory-account-history { margin: 20px 0; }
+.inventory-account-history .read-only-row { padding: 12px 0; gap: 16px; }
+.accounts-settings { max-width: none; }
+.accounts-help { padding: 0 24px; color: #66796f; line-height: 1.6; }
+.account-group { padding: 8px 24px 20px; }
+.account-group h3 { font-size: 16px; color: #395c4e; }
+.managed-account { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 0; border-bottom: 1px solid #e4ebe6; }
+.managed-account small { display: block; margin-top: 6px; color: #75867e; }
+.account-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.account-badge { overflow-wrap: anywhere; }
+@media (max-width: 800px) { .managed-account { align-items: flex-start; flex-direction: column; } }

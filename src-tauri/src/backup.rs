@@ -16,7 +16,7 @@ use crate::{
     error::{AppError, AppResult},
     models::{BackupInfo, BackupManifest, RestoreInput},
     security::{self, KeyEnvelope},
-    state::AppState,
+    state::{AppPaths, AppState},
 };
 
 const DATABASE_ENTRY: &str = "database.db";
@@ -85,6 +85,32 @@ fn archive_backup(
     Ok(())
 }
 
+pub fn before_migration(
+    connection: &Connection,
+    key: &[u8],
+    paths: &AppPaths,
+) -> AppResult<PathBuf> {
+    let temp = TempDir::new_in(&paths.data_dir)?;
+    let snapshot = temp.path().join(DATABASE_ENTRY);
+    database_snapshot(connection, &snapshot, key)?;
+    let manifest = BackupManifest {
+        app_version: env!("CARGO_PKG_VERSION").into(),
+        schema_version: db::schema_version(connection)?,
+        created_at: Utc::now().to_rfc3339(),
+        database_sha256: sha256_file(&snapshot)?,
+        business_name: db::get_settings(connection)?.business_name,
+    };
+    let path = paths.backups.join(format!(
+        "avant-migration-v{}-{}.msbackup",
+        manifest.schema_version,
+        uuid::Uuid::new_v4()
+    ));
+    archive_backup(&path, &snapshot, &paths.security, &manifest)?;
+    // Verify the completed archive before touching the source database.
+    extract_and_validate(&path)?;
+    Ok(path)
+}
+
 pub fn create_backup(state: &AppState, destination: Option<PathBuf>) -> AppResult<BackupInfo> {
     let key = state.database_key()?;
     let timestamp = Utc::now();
@@ -105,7 +131,7 @@ pub fn create_backup(state: &AppState, destination: Option<PathBuf>) -> AppResul
     let settings = state.with_connection(|connection| db::get_settings(connection))?;
     let manifest = BackupManifest {
         app_version: env!("CARGO_PKG_VERSION").into(),
-        schema_version: db::SCHEMA_VERSION,
+        schema_version: state.with_connection(|connection| db::schema_version(connection))?,
         created_at: timestamp.to_rfc3339(),
         database_sha256: sha256_file(&snapshot)?,
         business_name: settings.business_name,
@@ -209,6 +235,15 @@ fn extract_and_validate(path: &Path) -> AppResult<ExtractedBackup> {
 }
 
 pub fn restore_backup(state: &AppState, input: RestoreInput) -> AppResult<BackupInfo> {
+    restore_backup_with(state, input, security::rewrap_recovered_key)
+}
+
+fn restore_backup_with(
+    state: &AppState,
+    input: RestoreInput,
+    rewrap: impl FnOnce(&[u8], &str, &str) -> AppResult<KeyEnvelope>,
+) -> AppResult<BackupInfo> {
+    crate::domain::validate_pin(&input.new_pin)?;
     let backup_path = PathBuf::from(&input.backup_path);
     if !backup_path.is_file() {
         return Err(AppError::Validation(
@@ -221,6 +256,13 @@ pub fn restore_backup(state: &AppState, input: RestoreInput) -> AppResult<Backup
     let restored_connection = db::open_database(&extracted.database, &database_key)?;
     db::integrity_check(&restored_connection)?;
     db::get_settings(&restored_connection)?;
+    if db::schema_version(&restored_connection)? != extracted.manifest.schema_version {
+        return Err(AppError::Validation(
+            "Version de sauvegarde incohérente.".into(),
+        ));
+    }
+    db::migrate(&restored_connection)?;
+    db::integrity_check(&restored_connection)?;
     drop(restored_connection);
 
     if state.setup_status().initialized && state.setup_status().unlocked {
@@ -240,11 +282,7 @@ pub fn restore_backup(state: &AppState, input: RestoreInput) -> AppResult<Backup
 
     let restore_result = (|| {
         fs::copy(&extracted.database, &state.paths.database)?;
-        let envelope = security::rewrap_recovered_key(
-            &database_key,
-            &input.new_pin,
-            &input.recovery_password,
-        )?;
+        let envelope = rewrap(&database_key, &input.new_pin, &input.recovery_password)?;
         security::write_envelope(&state.paths.security, &envelope)?;
         state.set_recovered_session(database_key)?;
         Ok(())
@@ -273,6 +311,164 @@ pub fn restore_backup(state: &AppState, input: RestoreInput) -> AppResult<Backup
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{accounts, db::test_support::*, models::*};
+
+    fn snapshot(connection: &Connection) -> serde_json::Value {
+        serde_json::json!({
+            "accounts": accounts::list(connection).unwrap(),
+            "inventories": db::list_inventories(connection,None).unwrap(),
+            "journal": db::list_journal_entries(connection,None).unwrap(),
+            "debts": db::list_debts(connection,None).unwrap(),
+            "audit": db::list_audit_events(connection,500).unwrap(),
+        })
+    }
+
+    #[test]
+    fn migration_requires_a_verified_encrypted_backup_before_any_change() {
+        let temp = TempDir::new().unwrap();
+        let state = AppState::new(temp.path().to_path_buf()).unwrap();
+        let key = vec![17u8; 32];
+        let connection = db::open_database(&state.paths.database, &key).unwrap();
+        legacy_database(&connection);
+        let before = historical_data(&connection);
+        // Missing envelope makes the safety backup fail: database must remain v1.
+        assert!(state.set_recovered_session(key.clone().into()).is_err());
+        assert_eq!(db::schema_version(&connection).unwrap(), 1);
+        assert_eq!(historical_data(&connection), before);
+        assert!(!state.setup_status().unlocked);
+        let envelope =
+            security::test_envelope(&key, "123456", "une phrase de récupération solide").unwrap();
+        security::write_envelope(&state.paths.security, &envelope).unwrap();
+        state.set_recovered_session(key.clone().into()).unwrap();
+        assert_eq!(db::schema_version(&connection).unwrap(), 2);
+        let backups = list_backups(&state).unwrap();
+        assert_eq!(backups.len(), 1);
+        let extracted = extract_and_validate(Path::new(&backups[0].path)).unwrap();
+        assert_eq!(extracted.manifest.schema_version, 1);
+        assert!(!fs::read(&extracted.database)
+            .unwrap()
+            .starts_with(b"SQLite format 3"));
+        let original = db::open_database(&extracted.database, &key).unwrap();
+        assert_eq!(db::schema_version(&original).unwrap(), 1);
+        assert_eq!(historical_data(&original), before);
+        state.with_connection(|_| Ok(())).unwrap();
+        assert_eq!(list_backups(&state).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn restores_v1_and_v2_archives_in_staging_and_preserves_multi_account_history() {
+        const PASSWORD: &str = "une phrase de récupération solide";
+        let source_dir = TempDir::new().unwrap();
+        let source = AppState::new(source_dir.path().to_path_buf()).unwrap();
+        let key = vec![31u8; 32];
+        let connection = db::open_database(&source.paths.database, &key).unwrap();
+        legacy_database(&connection);
+        let legacy = historical_data(&connection);
+        drop(connection);
+        security::write_envelope(
+            &source.paths.security,
+            &security::test_envelope(&key, "123456", PASSWORD).unwrap(),
+        )
+        .unwrap();
+        source.set_recovered_session(key.clone().into()).unwrap();
+        let v1 = list_backups(&source).unwrap().remove(0);
+        source
+            .with_connection(|db| {
+                let extra = accounts::create(
+                    db,
+                    CreateAccountInput {
+                        provider: "wave".into(),
+                        name: "Wave 2".into(),
+                        identifier: Some("771234567".into()),
+                    },
+                )?;
+                let loan = debt(db, "legacy-djamo");
+                payment(db, &loan.id, &extra.snapshot.account_id, 10_000);
+                accounts::update(
+                    db,
+                    UpdateAccountInput {
+                        account_id: "legacy-djamo".into(),
+                        name: "Djamo renommé".into(),
+                        identifier: Some("DJ2".into()),
+                    },
+                )?;
+                let unused = accounts::create(
+                    db,
+                    CreateAccountInput {
+                        provider: "orange_money".into(),
+                        name: "Réserve".into(),
+                        identifier: None,
+                    },
+                )?;
+                accounts::set_active(db, &unused.snapshot.account_id, false)?;
+                let values = balances(db);
+                close(db, values);
+                Ok(())
+            })
+            .unwrap();
+        let v2 = create_backup(&source, None).unwrap();
+        let expected = source.with_connection(|db| Ok(snapshot(db))).unwrap();
+        for (version, backup) in [(1, v1), (2, v2)] {
+            let target_dir = TempDir::new().unwrap();
+            let target = AppState::new(target_dir.path().to_path_buf()).unwrap();
+            let input = RestoreInput {
+                backup_path: backup.path,
+                recovery_password: PASSWORD.into(),
+                new_pin: "654321".into(),
+            };
+            if version == 2 {
+                // Exercise replacement of an existing unlocked installation as well.
+                let mut existing = db::open_database(&target.paths.database, &[22u8; 32]).unwrap();
+                db::migrate(&existing).unwrap();
+                db::initialize_business(&mut existing, &multi_setup()).unwrap();
+                security::write_envelope(
+                    &target.paths.security,
+                    &security::test_envelope(&[22u8; 32], "123456", PASSWORD).unwrap(),
+                )
+                .unwrap();
+                target.set_recovered_session(vec![22u8; 32].into()).unwrap();
+            }
+            let before_attempt = if target.setup_status().unlocked {
+                Some(target.with_connection(|db| Ok(snapshot(db))).unwrap())
+            } else {
+                None
+            };
+            let wrong = RestoreInput {
+                recovery_password: "un mot de passe erroné".into(),
+                ..input.clone()
+            };
+            assert!(restore_backup_with(&target, wrong, security::test_envelope).is_err());
+            if let Some(before) = before_attempt {
+                assert_eq!(
+                    target.with_connection(|db| Ok(snapshot(db))).unwrap(),
+                    before
+                );
+            } else {
+                assert!(!target.paths.database.exists());
+            }
+            restore_backup_with(&target, input, security::test_envelope).unwrap();
+            assert!(target.setup_status().unlocked);
+            target
+                .with_connection(|db| {
+                    assert_eq!(db::schema_version(db)?, 2);
+                    if version == 1 {
+                        assert_eq!(historical_data(db), legacy);
+                        assert_eq!(accounts::list(db)?.len(), 4);
+                        assert_eq!(
+                            db::list_audit_events(db, 500)?
+                                .iter()
+                                .filter(|a| a.action == "schema_migrated")
+                                .count(),
+                            1
+                        );
+                    } else {
+                        assert_eq!(snapshot(db), expected);
+                    }
+                    db::integrity_check(db)
+                })
+                .unwrap();
+        }
+    }
 
     #[test]
     fn backup_archive_roundtrip_checks_hash_and_manifest() {

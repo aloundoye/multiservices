@@ -1,3 +1,4 @@
+mod accounts;
 mod backup;
 mod commands;
 mod db;
@@ -25,6 +26,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::check_setup,
+            commands::list_accounts,
+            commands::create_account,
+            commands::update_account,
+            commands::archive_account,
+            commands::reactivate_account,
+            commands::preview_opening,
             commands::setup_business,
             commands::login,
             commands::lock_app,
