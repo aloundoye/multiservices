@@ -234,6 +234,11 @@ pub fn write_envelope(path: &Path, envelope: &KeyEnvelope) -> AppResult<()> {
 }
 
 #[cfg(test)]
+pub(crate) fn test_envelope(key: &[u8], pin: &str, password: &str) -> AppResult<KeyEnvelope> {
+    create_envelope_with_device(key, pin, password, &[7u8; 32])
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

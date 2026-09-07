@@ -1,3 +1,4 @@
+import { AccountsSettings } from "./AccountsSettings";
 import { useEffect, useState, type FormEvent } from "react";
 import { ArchiveRestore, DatabaseBackup, ExternalLink, FileKey2, HardDrive, History, Save, Settings2, ShieldCheck, Usb } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -8,6 +9,11 @@ import { formatDate } from "../lib/format";
 import type { AuditEvent, BackupInfo, BusinessSettings } from "../types";
 
 const auditLabels: Record<string, string> = {
+  account_created: "Compte créé",
+  account_updated: "Compte modifié",
+  account_archived: "Compte archivé",
+  account_reactivated: "Compte réactivé",
+  schema_migrated: "Migration multi-comptes",
   business_initialized: "Boutique initialisée",
   settings_updated: "Paramètres modifiés",
   inventory_closed: "Inventaire clôturé",
@@ -23,7 +29,7 @@ export function SettingsPage({ notify, onChanged }: { notify: (message: string) 
   const [settings, setSettings] = useState<BusinessSettings>();
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [audit, setAudit] = useState<AuditEvent[]>([]);
-  const [tab, setTab] = useState<"general" | "backup" | "audit">("general");
+  const [tab, setTab] = useState<"general" | "accounts" | "backup" | "audit">("general");
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [restorePath, setRestorePath] = useState("");
   const [recoveryPassword, setRecoveryPassword] = useState("");
@@ -66,8 +72,9 @@ export function SettingsPage({ notify, onChanged }: { notify: (message: string) 
   return (
     <div className="page">
       <header className="page-header"><div><p className="eyebrow">SYSTÈME</p><h1>Paramètres et sécurité</h1><p>Configurez les rappels, sauvegardes et consultez la trace d’audit.</p></div></header>
-      <div className="settings-tabs"><button className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}><Settings2 /> Général</button><button className={tab === "backup" ? "active" : ""} onClick={() => setTab("backup")}><DatabaseBackup /> Sauvegardes</button><button className={tab === "audit" ? "active" : ""} onClick={() => setTab("audit")}><History /> Journal d’audit</button></div>
+      <div className="settings-tabs"><button className={tab === "general" ? "active" : ""} onClick={() => setTab("general")}><Settings2 /> Général</button><button className={tab === "accounts" ? "active" : ""} onClick={() => setTab("accounts")}><Settings2 /> Comptes et SIM</button><button className={tab === "backup" ? "active" : ""} onClick={() => setTab("backup")}><DatabaseBackup /> Sauvegardes</button><button className={tab === "audit" ? "active" : ""} onClick={() => setTab("audit")}><History /> Journal d’audit</button></div>
       {error && <div className="form-error page-error">{error}</div>}
+      {tab === "accounts" && <AccountsSettings notify={notify} onChanged={() => { onChanged(); void load().catch((e) => setError(String(e))); }} />}
       {tab === "general" && settings && <form className="panel settings-panel" onSubmit={saveSettings}><header className="panel-header"><div><h2>Configuration de la boutique</h2><p>Les changements prennent effet immédiatement.</p></div></header><div className="settings-form"><Field label="Nom de la boutique"><TextInput value={settings.businessName} onChange={(e) => setSettings({ ...settings, businessName: e.target.value })} /></Field><div className="form-grid"><Field label="Rappel d’inventaire"><SelectInput value={settings.inventoryIntervalMinutes} onChange={(e) => setSettings({ ...settings, inventoryIntervalMinutes: Number(e.target.value) })}><option value={60}>Toutes les heures</option><option value={120}>Toutes les 2 heures</option><option value={240}>Toutes les 4 heures</option><option value={360}>Toutes les 6 heures</option><option value={480}>Toutes les 8 heures</option><option value={720}>Toutes les 12 heures</option><option value={1440}>Une fois par jour</option></SelectInput></Field><Field label="Verrouillage automatique"><SelectInput value={settings.autoLockMinutes} onChange={(e) => setSettings({ ...settings, autoLockMinutes: Number(e.target.value) })}><option value={5}>Après 5 minutes</option><option value={10}>Après 10 minutes</option><option value={15}>Après 15 minutes</option><option value={30}>Après 30 minutes</option><option value={60}>Après 1 heure</option></SelectInput></Field></div><div className="read-only-row"><span>Devise</span><strong>{settings.currency} — Franc CFA</strong></div><div className="read-only-row"><span>Fuseau horaire</span><strong>{settings.timezone}</strong></div><button className="button primary align-self" disabled={loading}><Save /> Enregistrer</button></div></form>}
       {tab === "backup" && <div className="backup-layout"><section className="panel settings-panel"><header className="panel-header"><div><h2>Protéger les données</h2><p>Les sauvegardes contiennent la base chiffrée et sa clé de récupération protégée.</p></div></header><div className="backup-actions"><button className="backup-action" onClick={localBackup} disabled={loading}><span className="backup-action-icon"><HardDrive /></span><div><strong>Sauvegarde locale</strong><small>Créer une copie dans le dossier sécurisé de l’application</small></div><ExternalLink /></button><button className="backup-action" onClick={externalBackup} disabled={loading}><span className="backup-action-icon usb"><Usb /></span><div><strong>Copier vers une clé USB</strong><small>Choisir un dossier externe pour conserver une copie</small></div><ExternalLink /></button><button className="backup-action restore" onClick={chooseRestore} disabled={loading}><span className="backup-action-icon restore"><ArchiveRestore /></span><div><strong>Restaurer une sauvegarde</strong><small>Vérifier puis remplacer les données actuelles</small></div><ExternalLink /></button></div><div className="security-callout"><ShieldCheck /><div><strong>Chiffrement actif</strong><p>La base et les copies sont illisibles sans les clés. Gardez le mot de passe de récupération dans un lieu sûr.</p></div></div></section><section className="panel backup-history"><header className="panel-header"><div><h2>Copies locales</h2><p>Les 30 sauvegardes les plus récentes sont conservées.</p></div></header>{backups.length === 0 ? <div className="empty-inline">Aucune sauvegarde locale.</div> : backups.slice(0, 10).map((item) => <div className="backup-row" key={item.path}><FileKey2 /><div><strong>{formatDate(item.createdAt, true)}</strong><small>{(item.sizeBytes / 1024).toFixed(0)} Ko • {item.path.split(/[\\/]/).pop()}</small></div></div>)}</section></div>}
       {tab === "audit" && <section className="panel table-panel"><div className="table-scroll"><table><thead><tr><th>Date et heure</th><th>Action</th><th>Élément</th><th>Détails vérifiables</th></tr></thead><tbody>{audit.map((event) => <tr key={event.id}><td>{formatDate(event.occurredAt, true)}</td><td><strong>{auditLabels[event.action] ?? event.action}</strong></td><td>{event.entityType}{event.entityId && <small>{event.entityId.slice(0, 8)}…</small>}</td><td><code>{JSON.stringify(event.details)}</code></td></tr>)}</tbody></table></div></section>}

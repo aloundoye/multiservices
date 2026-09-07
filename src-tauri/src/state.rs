@@ -9,10 +9,9 @@ use rusqlite::Connection;
 use zeroize::Zeroizing;
 
 use crate::{
-    db,
-    domain::validate_initial_allocation,
+    accounts, backup, db,
     error::{AppError, AppResult},
-    models::{AccountBalances, LoginInput, SetupInput, SetupStatus},
+    models::{LoginInput, SetupInput, SetupStatus},
     security,
 };
 
@@ -57,6 +56,13 @@ impl AppState {
         })
     }
 
+    fn migrate_safely(&self, connection: &Connection, key: &[u8]) -> AppResult<()> {
+        if db::schema_version(connection)? == 1 {
+            backup::before_migration(connection, key, &self.paths)?;
+        }
+        db::migrate(connection)
+    }
+
     pub fn setup_status(&self) -> SetupStatus {
         SetupStatus {
             initialized: self.paths.database.exists() && self.paths.security.exists(),
@@ -70,21 +76,15 @@ impl AppState {
                 "L’application a déjà été initialisée.".into(),
             ));
         }
-        let balances = AccountBalances {
-            orange_money: input.orange_money,
-            wave: input.wave,
-            djamo: input.djamo,
-            cash: input.cash,
-        };
-        validate_initial_allocation(input.initial_capital, &balances)?;
+        accounts::validate_opening(&input)?;
         let (envelope, database_key) =
             security::create_key_envelope(&input.pin, &input.recovery_password)?;
         security::write_envelope(&self.paths.security, &envelope)?;
 
         let result = (|| {
             let mut connection = db::open_database(&self.paths.database, &database_key)?;
-            db::migrate(&connection)?;
-            db::initialize_business(&mut connection, &input, &balances)?;
+            self.migrate_safely(&connection, &database_key)?;
+            db::initialize_business(&mut connection, &input)?;
             db::integrity_check(&connection)?;
             let settings = db::get_settings(&connection)?;
             *self
@@ -115,7 +115,7 @@ impl AppState {
         let envelope = security::read_envelope(&self.paths.security)?;
         let database_key = security::unlock_with_pin(&envelope, &input.pin)?;
         let connection = db::open_database(&self.paths.database, &database_key)?;
-        db::migrate(&connection)?;
+        self.migrate_safely(&connection, &database_key)?;
         let settings = db::get_settings(&connection)?;
         *self
             .session
@@ -170,13 +170,13 @@ impl AppState {
     ) -> AppResult<T> {
         let key = self.active_key()?;
         let mut connection = db::open_database(&self.paths.database, &key)?;
-        db::migrate(&connection)?;
+        self.migrate_safely(&connection, &key)?;
         operation(&mut connection)
     }
 
     pub fn set_recovered_session(&self, key: Zeroizing<Vec<u8>>) -> AppResult<()> {
         let connection = db::open_database(&self.paths.database, &key)?;
-        db::migrate(&connection)?;
+        self.migrate_safely(&connection, &key)?;
         let settings = db::get_settings(&connection)?;
         *self
             .session

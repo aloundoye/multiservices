@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  Account, AccountBalanceInput, OpeningAccount, OpeningPreview, CreateAccountInput, UpdateAccountInput,
+  CloseInventoryInput, InventoryCorrectionInput, CreateJournalEntryInput, CreateDebtInput, RecordPaymentInput,
   AuditEvent,
   BackupInfo,
   BusinessSettings,
@@ -35,6 +37,12 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 }
 
 export const api = {
+  accounts: () => call<Account[]>("list_accounts"),
+  createAccount: (input: CreateAccountInput) => call<Account>("create_account", { input }),
+  updateAccount: (input: UpdateAccountInput) => call<Account>("update_account", { input }),
+  archiveAccount: (accountId: string) => call<Account>("archive_account", { accountId }),
+  reactivateAccount: (accountId: string) => call<Account>("reactivate_account", { accountId }),
+  previewOpening: (accounts: OpeningAccount[], initialCapital: number) => call<OpeningPreview>("preview_opening", { accounts, initialCapital }),
   checkSetup: () => {
     const tauriAvailable = Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
     return !tauriAvailable && import.meta.env.DEV
@@ -45,21 +53,21 @@ export const api = {
   login: (pin: string) => call<Dashboard>("login", { input: { pin } }),
   lock: () => call<void>("lock_app"),
   dashboard: () => call<Dashboard>("get_dashboard"),
-  previewInventory: (input: Record<string, number>) =>
+  previewInventory: (input: { balances: AccountBalanceInput[] }) =>
     call<InventoryPreview>("preview_inventory", { input }),
-  closeInventory: (input: Record<string, unknown>) =>
+  closeInventory: (input: CloseInventoryInput) =>
     call<CloseInventoryResult>("close_inventory", { input }),
-  correctInventory: (input: Record<string, unknown>) =>
+  correctInventory: (input: InventoryCorrectionInput) =>
     call<JournalEntry>("create_inventory_correction", { input }),
   inventories: () => call<Inventory[]>("list_inventories"),
   journal: () => call<JournalEntry[]>("list_journal_entries"),
-  createJournal: (input: Record<string, unknown>) =>
+  createJournal: (input: CreateJournalEntryInput) =>
     call<JournalEntry>("create_journal_entry", { input }),
   reverseJournal: (entryId: string, reason: string) =>
     call<JournalEntry>("reverse_journal_entry", { input: { entryId, reason } }),
   debts: () => call<Debt[]>("list_debts"),
-  createDebt: (input: Record<string, unknown>) => call<Debt>("create_debt", { input }),
-  payDebt: (input: Record<string, unknown>) => call<Debt>("record_debt_payment", { input }),
+  createDebt: (input: CreateDebtInput) => call<Debt>("create_debt", { input }),
+  payDebt: (input: RecordPaymentInput) => call<Debt>("record_debt_payment", { input }),
   cancelDebt: (debtId: string, reason: string) =>
     call<Debt>("cancel_debt", { input: { debtId, reason } }),
   report: (filters: ReportFilters) => call<ReportData>("get_report", { filters }),

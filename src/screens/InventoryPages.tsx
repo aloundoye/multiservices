@@ -1,3 +1,4 @@
+import { AccountSelect, accountLabel, accountDisplayLabel } from "../components/AccountSelect";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { AlertCircle, ArrowRight, CheckCircle2, Clock3, Eye, History, LoaderCircle, RotateCcw, Scale, ShieldCheck } from "lucide-react";
 import { api } from "../api";
@@ -16,7 +17,8 @@ const accountMeta: Array<{ key: BalanceKey; name: string; color: string }> = [
 ];
 
 export function InventoryPage({ dashboard, onDone }: { dashboard: Dashboard; onDone: (message: string) => void }) {
-  const [balances, setBalances] = useState<AccountBalances>(dashboard.lastInventory.balances);
+  const [balances, setBalances] = useState<Record<string, number | "">>(() => Object.fromEntries(dashboard.accounts.filter((a) => a.active).map((a) => [a.accountId, a.lastBalance ?? ""])));
+  const inputs = () => Object.entries(balances).map(([accountId, amount]) => ({ accountId, amount: amount === "" ? NaN : amount }));
   const [preview, setPreview] = useState<InventoryPreview>();
   const [category, setCategory] = useState("");
   const [note, setNote] = useState("");
@@ -25,29 +27,35 @@ export function InventoryPage({ dashboard, onDone }: { dashboard: Dashboard; onD
   const [closed, setClosed] = useState<CloseInventoryResult>();
 
   useEffect(() => {
+    let current = true;
+    setPreview(undefined);
     const timer = window.setTimeout(async () => {
       try {
-        setPreview(await api.previewInventory(balances as unknown as Record<string, number>));
-        setError("");
+        const values = inputs();
+        if (values.some((v) => !Number.isSafeInteger(v.amount))) throw new Error("Renseignez un solde pour chaque compte.");
+        const result = await api.previewInventory({ balances: values });
+        if (current) { setPreview(result); setError(""); }
       } catch (reason) {
+        if (!current) return;
         setPreview(undefined);
         setError(reason instanceof Error ? reason.message : String(reason));
       }
     }, 250);
-    return () => window.clearTimeout(timer);
+    return () => { current = false; window.clearTimeout(timer); };
   }, [balances]);
 
-  function update(key: BalanceKey, value: string) {
-    setBalances((current) => ({ ...current, [key]: Number(value) }));
+  function update(key: string, value: string) {
+    setBalances((current) => ({ ...current, [key]: value === "" ? "" : Number(value) }));
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (!preview) return setError("Attendez la validation des soldes avant de clôturer.");
     setLoading(true);
     setError("");
     try {
       const result = await api.closeInventory({
-        ...balances,
+        balances: inputs(),
         varianceCategory: category || null,
         varianceNote: note || null
       });
@@ -75,13 +83,22 @@ export function InventoryPage({ dashboard, onDone }: { dashboard: Dashboard; onD
         <section className="panel inventory-form-panel">
           <header className="panel-header"><div><h2>Soldes réellement constatés</h2><p>Saisissez les montants affichés sur chaque compte et les espèces comptées.</p></div></header>
           <div className="inventory-account-grid">
-            {accountMeta.map(({ key, name, color }) => (
-              <div className="inventory-account" key={key}>
-                <div className={`account-badge ${color}`}><span></span>{name}</div>
-                <MoneyInput value={balances[key]} onChange={(event) => update(key, event.target.value)} required />
-                <div className="comparison"><span>Précédent: {formatMoney(dashboard.lastInventory.balances[key])}</span><strong className={(preview?.delta[key] ?? 0) > 0 ? "positive" : (preview?.delta[key] ?? 0) < 0 ? "negative" : ""}>{signed(preview?.delta[key] ?? 0)}</strong></div>
-              </div>
-            ))}
+            {accountMeta.map(({ name, color, key }) => {
+              const provider = key === "orangeMoney" ? "orange_money" : key;
+              return <section key={key} className="inventory-service">
+                <h3>{name} <span>{preview ? formatMoney(preview.balances[key]) : "—"}</span></h3>
+                {dashboard.accounts.filter((a) => a.active && a.provider === provider).map((a) => {
+                  const detail = preview?.accountBalances.find((d) => d.accountId === a.accountId);
+                  return <div className="inventory-account" key={a.accountId}>
+                    <label className="field">
+                      <span className={`account-badge ${color}`}>{accountLabel(a)}</span>
+                      <MoneyInput value={balances[a.accountId] ?? ""} onChange={(e) => update(a.accountId, e.target.value)} required />
+                    </label>
+                    <div className="comparison"><span>{a.lastBalance == null ? "Pas encore relevé" : `Précédent : ${formatMoney(a.lastBalance)}`}</span><strong>{detail?.delta == null ? "—" : signed(detail.delta)}</strong></div>
+                  </div>;
+                })}
+              </section>;
+            })}
           </div>
           {error && <div className="form-error">{error}</div>}
         </section>
@@ -115,7 +132,7 @@ export function InventoryHistoryPage({ onChanged, notify }: { onChanged: () => v
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [correctionOpen, setCorrectionOpen] = useState(false);
-  const [correction, setCorrection] = useState({ amount: 0, direction: "increase", paymentAccount: "cash", reason: "" });
+  const [correction, setCorrection] = useState({ amount: 0, direction: "increase", accountId: "", reason: "" });
   const [correctionError, setCorrectionError] = useState("");
 
   useEffect(() => { api.inventories().then(setItems).finally(() => setLoading(false)); }, []);
@@ -128,7 +145,7 @@ export function InventoryHistoryPage({ onChanged, notify }: { onChanged: () => v
     try {
       await api.correctInventory({ inventoryId: selected.id, ...correction });
       setCorrectionOpen(false);
-      setCorrection({ amount: 0, direction: "increase", paymentAccount: "cash", reason: "" });
+      setCorrection({ amount: 0, direction: "increase", accountId: "", reason: "" });
       onChanged();
       notify("Correction liée à l’inventaire ajoutée au journal.");
     } catch (reason) {
@@ -144,10 +161,10 @@ export function InventoryHistoryPage({ onChanged, notify }: { onChanged: () => v
         {loading ? <div className="empty-state"><LoaderCircle className="spin" /> Chargement…</div> : <div className="table-scroll"><table><thead><tr><th>Date de clôture</th><th>Liquidités</th><th>Créances</th><th>Capital attendu</th><th>Capital réel</th><th>Écart</th><th></th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id}><td><strong>{item.kind === "opening" ? "Ouverture" : formatDate(item.closedAt, true)}</strong>{item.kind === "opening" && <small>{formatDate(item.closedAt, true)}</small>}</td><td>{formatMoney(item.liquidity)}</td><td>{formatMoney(item.receivables)}</td><td>{formatMoney(item.expectedTotal)}</td><td><strong>{formatMoney(item.actualTotal)}</strong></td><td><span className={`status-chip ${item.variance === 0 ? "paid" : item.variance > 0 ? "open" : "overdue"}`}>{signed(item.variance)}</span></td><td><button className="icon-button" onClick={() => setSelected(item)}><Eye size={18} /></button></td></tr>)}</tbody></table></div>}
       </section>
       <Modal title="Détail de l’inventaire" subtitle={selected ? formatDate(selected.closedAt, true) : ""} open={Boolean(selected)} onClose={() => setSelected(undefined)} wide>
-        {selected && <div className="inventory-detail"><div className="detail-cards">{accountMeta.map(({ key, name, color }) => <div key={key}><span className={`dot ${color}`}></span><small>{name}</small><strong>{formatMoney(selected.balances[key])}</strong><em>{signed(selected.delta[key])} depuis le précédent</em></div>)}</div><div className="detail-summary"><div><span>Liquidités</span><strong>{formatMoney(selected.liquidity)}</strong></div><div><span>Créances</span><strong>{formatMoney(selected.receivables)}</strong></div><div><span>Attendu</span><strong>{formatMoney(selected.expectedTotal)}</strong></div><div><span>Réel</span><strong>{formatMoney(selected.actualTotal)}</strong></div><div><span>Écart</span><strong>{signed(selected.variance)}</strong></div></div>{selected.variance !== 0 && <div className="justification"><strong>{label(selected.varianceCategory ?? "autre")}</strong><p>{selected.varianceNote}</p></div>}<button className="button secondary correction-button" onClick={() => { setCorrectionError(""); setCorrectionOpen(true); }}><RotateCcw /> Ajouter une correction liée</button></div>}
+        {selected && <div className="inventory-detail"><div className="detail-cards">{accountMeta.map(({ key, name, color }) => <div key={key}><span className={`dot ${color}`}></span><small>{name}</small><strong>{formatMoney(selected.balances[key])}</strong><em>{signed(selected.delta[key])} depuis le précédent</em></div>)}</div><div className="inventory-account-history">{selected.accountBalances.map((a) => <div className="read-only-row" key={a.accountId}><span>{accountDisplayLabel(a)}{a.legacy && <small>Solde historique regroupé par service</small>}</span><strong>{formatMoney(a.amount)}<small>{a.delta == null ? "Pas de relevé précédent" : signed(a.delta)}</small></strong></div>)}</div><div className="detail-summary"><div><span>Liquidités</span><strong>{formatMoney(selected.liquidity)}</strong></div><div><span>Créances</span><strong>{formatMoney(selected.receivables)}</strong></div><div><span>Attendu</span><strong>{formatMoney(selected.expectedTotal)}</strong></div><div><span>Réel</span><strong>{formatMoney(selected.actualTotal)}</strong></div><div><span>Écart</span><strong>{signed(selected.variance)}</strong></div></div>{selected.variance !== 0 && <div className="justification"><strong>{label(selected.varianceCategory ?? "autre")}</strong><p>{selected.varianceNote}</p></div>}<button className="button secondary correction-button" onClick={() => { setCorrectionError(""); setCorrectionOpen(true); }}><RotateCcw /> Ajouter une correction liée</button></div>}
       </Modal>
       <Modal title="Correction liée à l’inventaire" subtitle="L’inventaire reste intact; une écriture auditée ajuste le capital attendu." open={correctionOpen} onClose={() => setCorrectionOpen(false)}>
-        <form className="modal-form" onSubmit={submitCorrection}><div className="form-grid"><Field label="Sens"><SelectInput value={correction.direction} onChange={(e) => setCorrection({ ...correction, direction: e.target.value })}><option value="increase">Augmenter le capital</option><option value="decrease">Diminuer le capital</option></SelectInput></Field><Field label="Montant"><MoneyInput value={correction.amount} onChange={(e) => setCorrection({ ...correction, amount: Number(e.target.value) })} required /></Field></div><Field label="Compte concerné"><SelectInput value={correction.paymentAccount} onChange={(e) => setCorrection({ ...correction, paymentAccount: e.target.value })}><option value="cash">Espèces</option><option value="orange_money">Orange Money</option><option value="wave">Wave</option><option value="djamo">Djamo</option></SelectInput></Field><Field label="Motif obligatoire"><TextArea value={correction.reason} onChange={(e) => setCorrection({ ...correction, reason: e.target.value })} required /></Field>{correctionError && <div className="form-error">{correctionError}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={() => setCorrectionOpen(false)}>Annuler</button><button className="button primary">Enregistrer la correction</button></div></form>
+        <form className="modal-form" onSubmit={submitCorrection}><div className="form-grid"><Field label="Sens"><SelectInput value={correction.direction} onChange={(e) => setCorrection({ ...correction, direction: e.target.value })}><option value="increase">Augmenter le capital</option><option value="decrease">Diminuer le capital</option></SelectInput></Field><Field label="Montant"><MoneyInput value={correction.amount} onChange={(e) => setCorrection({ ...correction, amount: Number(e.target.value) })} required /></Field></div><Field label="Compte concerné"><AccountSelect value={correction.accountId} onChange={(accountId) => setCorrection({ ...correction, accountId })} /></Field><Field label="Motif obligatoire"><TextArea value={correction.reason} onChange={(e) => setCorrection({ ...correction, reason: e.target.value })} required /></Field>{correctionError && <div className="form-error">{correctionError}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={() => setCorrectionOpen(false)}>Annuler</button><button className="button primary">Enregistrer la correction</button></div></form>
       </Modal>
     </div>
   );

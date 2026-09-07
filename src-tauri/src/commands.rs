@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use tauri::State;
 
-use crate::{backup, db, export, models::*, state::AppState};
+use crate::{accounts, backup, db, export, models::*, state::AppState};
 
 type CommandResult<T> = Result<T, String>;
 
@@ -220,4 +220,60 @@ pub fn restore_backup(
     state: State<'_, AppState>,
 ) -> CommandResult<BackupInfo> {
     backup::restore_backup(&state, input).map_err(command_error)
+}
+
+#[tauri::command]
+pub fn list_accounts(state: State<'_, AppState>) -> CommandResult<Vec<Account>> {
+    state
+        .with_connection(|c| accounts::list(c))
+        .map_err(command_error)
+}
+#[tauri::command]
+pub fn create_account(
+    input: CreateAccountInput,
+    state: State<'_, AppState>,
+) -> CommandResult<Account> {
+    state
+        .with_connection(|c| accounts::create(c, input))
+        .map_err(command_error)
+}
+#[tauri::command]
+pub fn update_account(
+    input: UpdateAccountInput,
+    state: State<'_, AppState>,
+) -> CommandResult<Account> {
+    state
+        .with_connection(|c| accounts::update(c, input))
+        .map_err(command_error)
+}
+#[tauri::command]
+pub fn archive_account(account_id: String, state: State<'_, AppState>) -> CommandResult<Account> {
+    state
+        .with_connection(|c| accounts::set_active(c, &account_id, false))
+        .map_err(command_error)
+}
+#[tauri::command]
+pub fn reactivate_account(
+    account_id: String,
+    state: State<'_, AppState>,
+) -> CommandResult<Account> {
+    state
+        .with_connection(|c| accounts::set_active(c, &account_id, true))
+        .map_err(command_error)
+}
+#[tauri::command]
+pub fn preview_opening(
+    accounts: Vec<OpeningAccount>,
+    initial_capital: Money,
+) -> CommandResult<OpeningPreview> {
+    let balances = accounts::opening_totals(&accounts).map_err(command_error)?;
+    let liquidity = balances.liquidity().ok_or("Total trop élevé.")?;
+    let difference = initial_capital
+        .checked_sub(liquidity)
+        .ok_or("Capital invalide.")?;
+    Ok(OpeningPreview {
+        balances,
+        liquidity,
+        difference,
+    })
 }

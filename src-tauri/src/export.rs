@@ -54,6 +54,9 @@ fn export_csv(destination: &Path, report: &ReportData) -> AppResult<()> {
         "date",
         "libelle",
         "compte_service",
+        "compte_id",
+        "compte_nom",
+        "compte_identifiant",
         "montant_fcfa",
         "solde_ou_ecart_fcfa",
         "statut_note",
@@ -68,10 +71,33 @@ fn export_csv(destination: &Path, report: &ReportData) -> AppResult<()> {
                 "Inventaire"
             },
             "tous",
+            "",
+            "",
+            "",
             &inventory.actual_total.to_string(),
             &inventory.variance.to_string(),
             inventory.variance_note.as_deref().unwrap_or(""),
         ])?;
+    }
+    for inventory in &report.inventories {
+        for detail in &inventory.account_balances {
+            writer.write_record([
+                "solde_compte",
+                &inventory.closed_at,
+                "Détail inventaire (hors synthèse)",
+                &detail.account.provider,
+                &detail.account.account_id,
+                &detail.account.name,
+                detail.account.identifier.as_deref().unwrap_or(""),
+                &detail.amount.to_string(),
+                &detail.delta.map(|v| v.to_string()).unwrap_or_default(),
+                if detail.legacy {
+                    "Solde historique regroupé"
+                } else {
+                    ""
+                },
+            ])?;
+        }
     }
     for entry in &report.journal {
         writer.write_record([
@@ -79,6 +105,9 @@ fn export_csv(destination: &Path, report: &ReportData) -> AppResult<()> {
             &entry.occurred_at,
             &entry.entry_type,
             &entry.payment_account,
+            &entry.account_snapshot.account_id,
+            &entry.account_snapshot.name,
+            entry.account_snapshot.identifier.as_deref().unwrap_or(""),
             &entry.signed_amount.to_string(),
             "",
             entry.note.as_deref().unwrap_or(""),
@@ -90,6 +119,9 @@ fn export_csv(destination: &Path, report: &ReportData) -> AppResult<()> {
             &debt.issued_at,
             &debt.customer_name,
             &debt.provider,
+            &debt.account_snapshot.account_id,
+            &debt.account_snapshot.name,
+            debt.account_snapshot.identifier.as_deref().unwrap_or(""),
             &debt.principal.to_string(),
             &debt.remaining.to_string(),
             &debt.status,
@@ -100,6 +132,9 @@ fn export_csv(destination: &Path, report: &ReportData) -> AppResult<()> {
                 &payment.paid_at,
                 &debt.customer_name,
                 &payment.account,
+                &payment.account_snapshot.account_id,
+                &payment.account_snapshot.name,
+                payment.account_snapshot.identifier.as_deref().unwrap_or(""),
                 &payment.amount.to_string(),
                 "",
                 payment.note.as_deref().unwrap_or(""),
@@ -182,6 +217,7 @@ fn export_xlsx(destination: &Path, report: &ReportData) -> AppResult<()> {
             "Référence",
             "Note",
             "Correction",
+            "Compte ID",
         ];
         for (column, title) in titles.iter().enumerate() {
             sheet
@@ -197,7 +233,7 @@ fn export_xlsx(destination: &Path, report: &ReportData) -> AppResult<()> {
                 .write_string(row, 1, &item.entry_type)
                 .map_err(xlsx_err)?;
             sheet
-                .write_string(row, 2, &item.payment_account)
+                .write_string(row, 2, item.account_snapshot.display_name())
                 .map_err(xlsx_err)?;
             sheet
                 .write_number_with_format(row, 3, item.signed_amount as f64, &money)
@@ -211,8 +247,14 @@ fn export_xlsx(destination: &Path, report: &ReportData) -> AppResult<()> {
             sheet
                 .write_string(row, 6, item.reverses_id.as_deref().unwrap_or(""))
                 .map_err(xlsx_err)?;
+            sheet
+                .write_string(row, 7, &item.account_snapshot.account_id)
+                .map_err(xlsx_err)?;
         }
         sheet.set_column_width(0, 14).map_err(xlsx_err)?;
+        sheet.set_column_width(2, 48).map_err(xlsx_err)?;
+        sheet.set_column_width(3, 20).map_err(xlsx_err)?;
+        sheet.set_column_width(7, 38).map_err(xlsx_err)?;
         sheet.set_column_width(4, 24).map_err(xlsx_err)?;
         sheet.set_column_width(5, 38).map_err(xlsx_err)?;
     }
@@ -224,11 +266,12 @@ fn export_xlsx(destination: &Path, report: &ReportData) -> AppResult<()> {
             "Date",
             "Client",
             "Téléphone",
-            "Service",
+            "Compte",
             "Principal",
             "Reste",
             "Échéance",
             "Statut",
+            "Compte ID",
         ];
         for (column, title) in titles.iter().enumerate() {
             sheet
@@ -245,7 +288,7 @@ fn export_xlsx(destination: &Path, report: &ReportData) -> AppResult<()> {
                 .map_err(xlsx_err)?;
             sheet.write_string(row, 2, &debt.phone).map_err(xlsx_err)?;
             sheet
-                .write_string(row, 3, &debt.provider)
+                .write_string(row, 3, debt.account_snapshot.display_name())
                 .map_err(xlsx_err)?;
             sheet
                 .write_number_with_format(row, 4, debt.principal as f64, &money)
@@ -257,14 +300,139 @@ fn export_xlsx(destination: &Path, report: &ReportData) -> AppResult<()> {
                 .write_string(row, 6, debt.due_date.as_deref().unwrap_or(""))
                 .map_err(xlsx_err)?;
             sheet.write_string(row, 7, &debt.status).map_err(xlsx_err)?;
+            sheet
+                .write_string(row, 8, &debt.account_snapshot.account_id)
+                .map_err(xlsx_err)?;
         }
+        sheet.set_column_width(8, 38).map_err(xlsx_err)?;
         for column in 0..=7 {
             sheet
-                .set_column_width(column, if column == 1 { 28 } else { 18 })
+                .set_column_width(
+                    column,
+                    if column == 3 {
+                        48
+                    } else if column == 1 {
+                        28
+                    } else {
+                        18
+                    },
+                )
                 .map_err(xlsx_err)?;
         }
     }
 
+    {
+        let sheet = workbook.add_worksheet();
+        sheet.set_name("Soldes par compte").map_err(xlsx_err)?;
+        for (column, title) in [
+            "Date",
+            "Compte ID",
+            "Service",
+            "Compte",
+            "Identifiant",
+            "Solde FCFA",
+            "Variation FCFA",
+            "Origine",
+        ]
+        .iter()
+        .enumerate()
+        {
+            sheet
+                .write_string_with_format(0, column as u16, *title, &header)
+                .map_err(xlsx_err)?;
+            sheet
+                .set_column_width(column as u16, 24)
+                .map_err(xlsx_err)?;
+        }
+        let mut row = 1;
+        for inventory in &report.inventories {
+            for d in &inventory.account_balances {
+                for (column, value) in [
+                    &inventory.closed_at,
+                    &d.account.account_id,
+                    &d.account.provider,
+                    &d.account.name,
+                    d.account.identifier.as_deref().unwrap_or(""),
+                ]
+                .iter()
+                .enumerate()
+                {
+                    sheet
+                        .write_string(row, column as u16, *value)
+                        .map_err(xlsx_err)?;
+                }
+                sheet
+                    .write_number_with_format(row, 5, d.amount as f64, &money)
+                    .map_err(xlsx_err)?;
+                if let Some(delta) = d.delta {
+                    sheet
+                        .write_number_with_format(row, 6, delta as f64, &money)
+                        .map_err(xlsx_err)?;
+                }
+                sheet
+                    .write_string(
+                        row,
+                        7,
+                        if d.legacy {
+                            "Historique regroupé"
+                        } else {
+                            "Relevé par compte"
+                        },
+                    )
+                    .map_err(xlsx_err)?;
+                row += 1;
+            }
+        }
+    }
+    {
+        let sheet = workbook.add_worksheet();
+        sheet.set_name("Remboursements").map_err(xlsx_err)?;
+        for (column, title) in [
+            "Date",
+            "Dette ID",
+            "Client",
+            "Compte ID",
+            "Compte",
+            "Montant FCFA",
+            "Note",
+        ]
+        .iter()
+        .enumerate()
+        {
+            sheet
+                .write_string_with_format(0, column as u16, *title, &header)
+                .map_err(xlsx_err)?;
+            sheet
+                .set_column_width(column as u16, 26)
+                .map_err(xlsx_err)?;
+        }
+        let mut row = 1;
+        for debt in &report.debts {
+            for payment in &debt.payments {
+                for (column, value) in [
+                    &payment.paid_at,
+                    &debt.id,
+                    &debt.customer_name,
+                    &payment.account_snapshot.account_id,
+                    &payment.account_snapshot.display_name(),
+                ]
+                .iter()
+                .enumerate()
+                {
+                    sheet
+                        .write_string(row, column as u16, *value)
+                        .map_err(xlsx_err)?;
+                }
+                sheet
+                    .write_number_with_format(row, 5, payment.amount as f64, &money)
+                    .map_err(xlsx_err)?;
+                sheet
+                    .write_string(row, 6, payment.note.as_deref().unwrap_or(""))
+                    .map_err(xlsx_err)?;
+                row += 1;
+            }
+        }
+    }
     workbook
         .save(destination)
         .map_err(|e| AppError::Export(e.to_string()))?;
@@ -309,6 +477,19 @@ fn export_pdf(destination: &Path, report: &ReportData) -> AppResult<()> {
             format_money(item.expected_total),
             format_money(item.variance)
         ));
+        for d in &item.account_balances {
+            lines.push(format!(
+                "  {} | Solde {} | Variation {}{}",
+                d.account.display_name(),
+                format_money(d.amount),
+                d.delta.map(format_money).unwrap_or_else(|| "—".into()),
+                if d.legacy {
+                    " | Historique regroupé"
+                } else {
+                    ""
+                }
+            ));
+        }
         if let Some(note) = &item.variance_note {
             lines.push(format!("  Motif: {note}"));
         }
@@ -320,7 +501,7 @@ fn export_pdf(destination: &Path, report: &ReportData) -> AppResult<()> {
             "{} | {} | {} | {}",
             item.occurred_at,
             item.entry_type,
-            item.payment_account,
+            item.account_snapshot.display_name(),
             format_money(item.signed_amount)
         ));
     }
@@ -332,12 +513,34 @@ fn export_pdf(destination: &Path, report: &ReportData) -> AppResult<()> {
             debt.issued_at,
             debt.customer_name,
             debt.phone,
-            debt.provider,
+            debt.account_snapshot.display_name(),
             format_money(debt.remaining),
             debt.status
         ));
+        for payment in &debt.payments {
+            lines.push(format!(
+                "  Reçu le {} | {} | {}",
+                payment.paid_at,
+                payment.account_snapshot.display_name(),
+                format_money(payment.amount)
+            ));
+        }
     }
 
+    let lines: Vec<String> = lines
+        .into_iter()
+        .flat_map(|line| {
+            let chars: Vec<char> = line.chars().collect();
+            if chars.is_empty() {
+                vec![String::new()]
+            } else {
+                chars
+                    .chunks(82)
+                    .map(|chunk| chunk.iter().collect())
+                    .collect()
+            }
+        })
+        .collect();
     let mut document = PdfDocument::new("Rapport Kër Finance");
     let mut pages = Vec::new();
     for chunk in lines.chunks(40) {
@@ -373,6 +576,136 @@ fn export_pdf(destination: &Path, report: &ReportData) -> AppResult<()> {
 mod tests {
     use super::*;
     use crate::models::ReportFilters;
+    use crate::{
+        accounts,
+        db::{self, test_support::*},
+        models::UpdateAccountInput,
+    };
+
+    #[test]
+    fn exports_match_rust_totals_and_historical_account_details() {
+        use std::io::Read;
+        let mut db = multi_database();
+        let djamo = id(&db, "Djamo 1");
+        let wave = id(&db, "Wave 2");
+        journal(&mut db, &wave);
+        let loan = debt(&mut db, &djamo);
+        payment(&mut db, &loan.id, &wave, 20_000);
+        accounts::update(
+            &mut db,
+            UpdateAccountInput {
+                account_id: wave.clone(),
+                name: "Nouveau nom".into(),
+                identifier: None,
+            },
+        )
+        .unwrap();
+        let report = db::get_report(
+            &db,
+            ReportFilters {
+                from: None,
+                to: None,
+            },
+        )
+        .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let csv_path = temp.path().join("report.csv");
+        export_csv(&csv_path, &report).unwrap();
+        let mut reader = csv::ReaderBuilder::new()
+            .delimiter(b';')
+            .from_path(csv_path)
+            .unwrap();
+        let records = reader.records().collect::<Result<Vec<_>, _>>().unwrap();
+        let summaries: Vec<_> = records.iter().filter(|r| &r[0] == "inventaire").collect();
+        let details: Vec<_> = records.iter().filter(|r| &r[0] == "solde_compte").collect();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(details.len(), 6);
+        assert_eq!(
+            &summaries[0][7],
+            &report.inventories[0].actual_total.to_string()
+        );
+        assert_eq!(
+            details
+                .iter()
+                .map(|r| r[7].parse::<i64>().unwrap())
+                .sum::<i64>(),
+            report.inventories[0].liquidity
+        );
+        for detail in &report.inventories[0].account_balances {
+            let row = details
+                .iter()
+                .find(|r| r[4] == detail.account.account_id)
+                .unwrap();
+            assert_eq!(&row[5], detail.account.name);
+            assert_eq!(&row[6], detail.account.identifier.as_deref().unwrap());
+            assert_eq!(&row[7], detail.amount.to_string());
+            assert_eq!(&row[8], ""); // No invented variation on the first reading.
+        }
+        for kind in ["journal", "remboursement"] {
+            let row = records.iter().find(|r| &r[0] == kind).unwrap();
+            assert_eq!(&row[4], wave);
+            assert_eq!(&row[5], "Wave 2");
+        }
+        let row = records.iter().find(|r| &r[0] == "dette").unwrap();
+        assert_eq!(&row[4], djamo);
+        assert_eq!(&row[7], "50000");
+        assert_eq!(&row[8], "30000");
+
+        let xlsx_path = temp.path().join("report.xlsx");
+        export_xlsx(&xlsx_path, &report).unwrap();
+        let mut zip = zip::ZipArchive::new(fs::File::open(xlsx_path).unwrap()).unwrap();
+        fn xml(zip: &mut zip::ZipArchive<fs::File>, name: &str) -> String {
+            let mut result = String::new();
+            zip.by_name(name)
+                .unwrap()
+                .read_to_string(&mut result)
+                .unwrap();
+            result
+        }
+        let strings = xml(&mut zip, "xl/sharedStrings.xml");
+        for detail in &report.inventories[0].account_balances {
+            assert!(strings.contains(&detail.account.account_id));
+            assert!(strings.contains(&detail.account.name));
+            assert!(strings.contains(detail.account.identifier.as_deref().unwrap()));
+        }
+        assert!(!strings.contains("Nouveau nom"));
+        let summary = xml(&mut zip, "xl/worksheets/sheet1.xml");
+        assert_eq!(summary.matches("<row ").count(), 2); // one summary, not six account rows
+        assert!(summary.contains("<v>5000000</v>"));
+        let account_sheet = xml(&mut zip, "xl/worksheets/sheet4.xml");
+        assert_eq!(account_sheet.matches("<row ").count(), 7);
+        assert!(account_sheet.contains("<v>1000000</v>"));
+        let payments = xml(&mut zip, "xl/worksheets/sheet5.xml");
+        assert_eq!(payments.matches("<row ").count(), 2);
+        assert!(payments.contains("<v>20000</v>"));
+
+        let pdf_path = temp.path().join("report.pdf");
+        export_pdf(&pdf_path, &report).unwrap();
+        let pdf = PdfDocument::parse(
+            &fs::read(pdf_path).unwrap(),
+            &printpdf::PdfParseOptions::default(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let text = pdf
+            .extract_text()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for name in ["Orange 1", "Orange 2", "Wave 1", "Wave 2", "Djamo 1"] {
+            assert!(text.contains(name), "PDF omitted {name}: {text}");
+        }
+        for amount in [
+            "5 000 000 FCFA",
+            "1 000 000 FCFA",
+            "20 000 FCFA",
+            "30 000 FCFA",
+        ] {
+            assert!(text.contains(amount), "PDF omitted {amount}: {text}");
+        }
+        assert!(!text.contains("Nouveau nom"));
+    }
 
     fn empty_report() -> ReportData {
         ReportData {

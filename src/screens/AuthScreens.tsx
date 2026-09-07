@@ -1,6 +1,7 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { OpeningAccountsEditor } from "../components/OpeningAccountsEditor";
+import { useEffect, useState, type FormEvent } from "react";
 import { ArrowRight, KeyRound, LockKeyhole, ShieldCheck, Store, WalletCards } from "lucide-react";
-import type { Dashboard, SetupInput } from "../types";
+import type { Dashboard, SetupInput, OpeningPreview } from "../types";
 import { api } from "../api";
 import { Field, MoneyInput, TextInput } from "../components/Fields";
 import { formatMoney } from "../lib/format";
@@ -62,10 +63,12 @@ const initial: SetupInput = {
   pin: "",
   recoveryPassword: "",
   initialCapital: 5_000_000,
-  orangeMoney: 0,
-  wave: 0,
-  djamo: 0,
-  cash: 0
+  accounts: [
+    { provider: "orange_money", name: "Orange Money — Principal", amount: 0 },
+    { provider: "wave", name: "Wave — Principal", amount: 0 },
+    { provider: "djamo", name: "Djamo — Principal", amount: 0 },
+    { provider: "cash", name: "Espèces", amount: 0 }
+  ]
 };
 
 export function SetupScreen({ onSuccess }: { onSuccess: (dashboard: Dashboard) => void }) {
@@ -75,12 +78,21 @@ export function SetupScreen({ onSuccess }: { onSuccess: (dashboard: Dashboard) =
   const [recoveryConfirm, setRecoveryConfirm] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const allocated = form.orangeMoney + form.wave + form.djamo + form.cash;
-  const difference = form.initialCapital - allocated;
-  const distributionPercent = useMemo(
-    () => form.initialCapital > 0 ? Math.min(100, Math.max(0, (allocated / form.initialCapital) * 100)) : 0,
-    [allocated, form.initialCapital]
-  );
+  const [allocation, setAllocation] = useState<OpeningPreview>();
+  const [allocationError, setAllocationError] = useState("");
+  useEffect(() => {
+    let current = true;
+    setAllocation(undefined);
+    const timer = setTimeout(() => {
+      if (form.accounts.some((a) => !Number.isSafeInteger(a.amount) || a.amount < 0)) {
+        setAllocationError("Renseignez un montant entier positif ou nul sur chaque compte."); return;
+      }
+      api.previewOpening(form.accounts, form.initialCapital).then((result) => {
+        if (current) { setAllocation(result); setAllocationError(""); }
+      }).catch((e) => { if (current) setAllocationError(String(e)); });
+    }, 200);
+    return () => { current = false; clearTimeout(timer); };
+  }, [form.accounts, form.initialCapital]);
 
   function patchValue(key: keyof SetupInput, value: string | number) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -89,7 +101,7 @@ export function SetupScreen({ onSuccess }: { onSuccess: (dashboard: Dashboard) =
   function next() {
     setError("");
     if (step === 1 && form.businessName.trim().length < 2) return setError("Indiquez le nom de la boutique.");
-    if (step === 2 && difference !== 0) return setError("La répartition doit être exactement égale au capital initial.");
+    if (step === 2 && (!allocation || allocation.difference !== 0 || form.initialCapital <= 0)) return setError("La répartition doit être exactement égale au capital initial.");
     setStep((value) => Math.min(3, value + 1));
   }
 
@@ -155,29 +167,18 @@ export function SetupScreen({ onSuccess }: { onSuccess: (dashboard: Dashboard) =
             <div className="section-icon"><WalletCards /></div>
             <p className="eyebrow">ÉTAPE 2 SUR 3</p>
             <h2>Répartissez le capital initial</h2>
-            <p>La somme des quatre comptes doit être exactement égale au capital indiqué.</p>
+            <p>Ajoutez vos SIM et répartissez le capital entre tous les comptes et la caisse.</p>
             <div className="capital-total-field">
               <Field label="Capital initial">
                 <MoneyInput value={form.initialCapital} onChange={(e) => patchValue("initialCapital", Number(e.target.value))} />
               </Field>
               <span>FCFA</span>
             </div>
-            <div className="allocation-grid">
-              {([
-                ["orangeMoney", "Orange Money", "orange"],
-                ["wave", "Wave", "wave"],
-                ["djamo", "Djamo", "djamo"],
-                ["cash", "Espèces", "cash"]
-              ] as const).map(([key, label, color]) => (
-                <Field key={key} label={label}>
-                  <div className={`account-input ${color}`}><span></span><MoneyInput value={form[key]} onChange={(e) => patchValue(key, Number(e.target.value))} /></div>
-                </Field>
-              ))}
-            </div>
+            <OpeningAccountsEditor accounts={form.accounts} onChange={(accounts) => { setAllocation(undefined); setForm((current) => ({ ...current, accounts })); }} />
+            {allocationError && <div className="form-error" role="alert">{allocationError}</div>}
             <div className="allocation-summary">
-              <div><span>Réparti</span><strong>{formatMoney(allocated)}</strong></div>
-              <div className={difference === 0 ? "balanced" : "unbalanced"}><span>Reste à répartir</span><strong>{formatMoney(difference)}</strong></div>
-              <div className="progress"><span style={{ width: `${distributionPercent}%` }} /></div>
+              <div><span>Réparti</span><strong>{allocation ? formatMoney(allocation.liquidity) : "Calcul…"}</strong></div>
+              <div className={allocation?.difference === 0 ? "balanced" : "unbalanced"}><span>Reste à répartir</span><strong>{allocation ? formatMoney(allocation.difference) : "—"}</strong></div>
             </div>
           </div>
         )}

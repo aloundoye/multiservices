@@ -1,3 +1,4 @@
+import { accountLabel } from "../components/AccountSelect";
 import {
   AlertTriangle,
   ArrowDownRight,
@@ -76,6 +77,16 @@ export function DashboardPage({ dashboard, onNavigate }: { dashboard: Dashboard;
                 <span className={`delta ${delta > 0 ? "up" : delta < 0 ? "down" : ""}`}>{delta > 0 ? <ArrowUpRight /> : delta < 0 ? <ArrowDownRight /> : null}{signed(delta)}</span>
               </div>
             ))}
+            {accounts.map(({ label: service, color }) => {
+              const provider = service === "Orange Money" ? "orange_money" : service === "Espèces" ? "cash" : service.toLowerCase();
+              const details = inventory.accountBalances.filter((a) => a.provider === provider);
+              const unmeasured = dashboard.accounts.filter((a) => a.active && a.provider === provider && !details.some((d) => d.accountId === a.accountId));
+              return <details className="service-detail" key={service}>
+                <summary><span className={`dot ${color}`} /> Comptes {service} ({details.length + unmeasured.length})</summary>
+                {details.map((a) => <div className="read-only-row" key={a.accountId}><span>{accountLabel(a)}{a.legacy && <small>Solde historique regroupé</small>}</span><strong>{formatMoney(a.amount)}</strong></div>)}
+                {unmeasured.map((a) => <div className="read-only-row" key={a.accountId}><span>{accountLabel(a)}</span><small>{a.lastBalance == null ? "Pas encore relevé" : "Réactivé — à relever au prochain inventaire"}</small></div>)}
+              </details>;
+            })}
           </div>
           <button className="text-button" onClick={() => onNavigate("history")}>Voir l’historique des inventaires <ArrowRight size={16} /></button>
         </article>
@@ -89,7 +100,7 @@ export function DashboardPage({ dashboard, onNavigate }: { dashboard: Dashboard;
           <article className="panel quick-actions">
             <header className="panel-header"><div><h2>Actions rapides</h2><p>Enregistrer un mouvement</p></div></header>
             <button onClick={() => onNavigate("journal")}><span className="quick-icon green"><Plus /></span><div><strong>Ajouter au journal</strong><small>Recette, achat ou dépense</small></div><ArrowRight /></button>
-            <button onClick={() => onNavigate("debts")}><span className="quick-icon amber"><HandCoins /></span><div><strong>Noter une dette</strong><small>Transfert Orange Money ou Wave</small></div><ArrowRight /></button>
+            <button onClick={() => onNavigate("debts")}><span className="quick-icon amber"><HandCoins /></span><div><strong>Noter une dette</strong><small>Transfert Orange Money, Wave ou Djamo</small></div><ArrowRight /></button>
             {dashboard.overdueDebtsCount > 0 && <div className="debt-alert"><AlertTriangle /><span><strong>{dashboard.overdueDebtsCount} dette{dashboard.overdueDebtsCount > 1 ? "s" : ""} en retard</strong><small>Consultez les échéances clients.</small></span></div>}
           </article>
         </div>
