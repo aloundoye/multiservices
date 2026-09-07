@@ -366,7 +366,7 @@ fn v1_migration_is_atomic_preserves_all_original_columns_and_runs_once() {
     legacy_database(&db);
     let before = historical_data(&db);
     migrate(&db).unwrap();
-    assert_eq!(schema_version(&db).unwrap(), 2);
+    assert_eq!(schema_version(&db).unwrap(), crate::db::SCHEMA_VERSION);
     assert_eq!(historical_data(&db), before);
     assert_eq!(accounts::list(&db).unwrap().len(), 4);
     let inventories = list_inventories(&db, None).unwrap();

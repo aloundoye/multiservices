@@ -133,6 +133,7 @@ pub struct InventoryCorrectionInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JournalEntry {
+    pub product_operation: Option<ProductOperationLink>,
     pub account_snapshot: AccountSnapshot,
     pub id: String,
     pub entry_type: String,
@@ -391,4 +392,134 @@ pub struct OpeningPreview {
     pub balances: AccountBalances,
     pub liquidity: Money,
     pub difference: Money,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Product {
+    pub id: String,
+    pub name: String,
+    pub price: Money,
+    pub stock: i64,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateProductInput {
+    pub request_id: String,
+    pub name: String,
+    pub price: Money,
+    pub initial_stock: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProductInput {
+    pub request_id: String,
+    pub product_id: String,
+    pub name: String,
+    pub price: Money,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveProductInput {
+    pub request_id: String,
+    pub product_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdjustStockInput {
+    pub request_id: String,
+    pub product_id: String,
+    pub quantity: i64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaleLineInput {
+    pub product_id: String,
+    pub quantity: i64,
+    pub unit_price: Money,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSaleInput {
+    pub request_id: String,
+    pub lines: Vec<SaleLineInput>,
+    pub account_id: String,
+    pub occurred_at: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiveStockInput {
+    pub request_id: String,
+    pub product_id: String,
+    pub quantity: i64,
+    pub amount: Money,
+    pub account_id: String,
+    pub occurred_at: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelProductOperationInput {
+    pub request_id: String,
+    pub operation_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductOperationLink {
+    pub id: String,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductOperationLine {
+    pub product_id: String,
+    pub product_name: String,
+    pub quantity: i64,
+    pub unit_price: Option<Money>,
+    pub total: Money,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductOperation {
+    pub id: String,
+    pub kind: String,
+    pub journal_entry_id: String,
+    pub account_snapshot: AccountSnapshot,
+    pub occurred_at: String,
+    pub created_at: String,
+    pub amount: Money,
+    pub note: Option<String>,
+    pub cancelled_at: Option<String>,
+    pub cancellation_reason: Option<String>,
+    pub lines: Vec<ProductOperationLine>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StockMovement {
+    pub id: String,
+    pub product_id: String,
+    pub product_name: String,
+    pub operation_id: Option<String>,
+    pub kind: String,
+    pub quantity: i64,
+    pub balance_after: i64,
+    pub reason: Option<String>,
+    pub occurred_at: String,
+    pub created_at: String,
 }

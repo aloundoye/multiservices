@@ -8,6 +8,7 @@ mod export;
 mod models;
 mod security;
 mod state;
+mod stock;
 
 use tauri::Manager;
 
@@ -26,6 +27,16 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::check_setup,
+            commands::list_products,
+            commands::create_product,
+            commands::update_product,
+            commands::archive_product,
+            commands::adjust_stock,
+            commands::create_product_sale,
+            commands::receive_stock,
+            commands::list_product_operations,
+            commands::cancel_product_operation,
+            commands::list_stock_movements,
             commands::list_accounts,
             commands::create_account,
             commands::update_account,

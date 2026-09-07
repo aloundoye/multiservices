@@ -99,6 +99,7 @@ export function DashboardPage({ dashboard, onNavigate }: { dashboard: Dashboard;
           </article>
           <article className="panel quick-actions">
             <header className="panel-header"><div><h2>Actions rapides</h2><p>Enregistrer un mouvement</p></div></header>
+            <button onClick={() => onNavigate("products")}><span className="quick-icon green"><Plus /></span><div><strong>Enregistrer une vente</strong><small>Produits, stock et encaissement</small></div><ArrowRight /></button>
             <button onClick={() => onNavigate("journal")}><span className="quick-icon green"><Plus /></span><div><strong>Ajouter au journal</strong><small>Recette, achat ou dépense</small></div><ArrowRight /></button>
             <button onClick={() => onNavigate("debts")}><span className="quick-icon amber"><HandCoins /></span><div><strong>Noter une dette</strong><small>Transfert Orange Money, Wave ou Djamo</small></div><ArrowRight /></button>
             {dashboard.overdueDebtsCount > 0 && <div className="debt-alert"><AlertTriangle /><span><strong>{dashboard.overdueDebtsCount} dette{dashboard.overdueDebtsCount > 1 ? "s" : ""} en retard</strong><small>Consultez les échéances clients.</small></span></div>}

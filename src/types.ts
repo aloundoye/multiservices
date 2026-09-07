@@ -64,6 +64,7 @@ export interface CloseInventoryResult {
 }
 
 export interface JournalEntry {
+  productOperation?: ProductOperationLink | null;
   accountSnapshot: AccountSnapshot;
   id: string;
   entryType: string;
@@ -155,6 +156,7 @@ export type PageId =
   | "dashboard"
   | "inventory"
   | "history"
+  | "products"
   | "journal"
   | "debts"
   | "reports"
@@ -194,3 +196,27 @@ export interface InventoryCorrectionInput { inventoryId: string; amount: Money; 
 export interface CreateJournalEntryInput { entryType: string; amount: Money; accountId: string; occurredAt: string; reference?: string | null; note?: string | null }
 export interface CreateDebtInput { customerName: string; phone: string; accountId: string; amount: Money; issuedAt: string; dueDate?: string | null; note?: string | null }
 export interface RecordPaymentInput { debtId: string; amount: Money; accountId: string; paidAt: string; note?: string | null }
+
+export interface Product { id: string; name: string; price: Money; stock: number; active: boolean }
+export interface ProductOperationLink { id: string; kind: "sale" | "receipt" }
+export interface ProductOperationLine {
+  productId: string; productName: string; quantity: number; unitPrice: Money | null; total: Money;
+}
+export interface ProductOperation extends ProductOperationLink {
+  journalEntryId: string; accountSnapshot: AccountSnapshot; occurredAt: string; createdAt: string;
+  amount: Money; note: string | null; cancelledAt: string | null; cancellationReason: string | null;
+  lines: ProductOperationLine[];
+}
+export interface StockMovement {
+  id: string; productId: string; productName: string; operationId: string | null;
+  kind: "initial" | "sale" | "receipt" | "adjustment" | "cancellation";
+  quantity: number; balanceAfter: number; reason: string | null; occurredAt: string; createdAt: string;
+}
+export interface CreateProductInput { requestId: string; name: string; price: Money; initialStock: number }
+export interface UpdateProductInput { requestId: string; productId: string; name: string; price: Money }
+export interface ArchiveProductInput { requestId: string; productId: string }
+export interface AdjustStockInput { requestId: string; productId: string; quantity: number; reason: string }
+export interface SaleLineInput { productId: string; quantity: number; unitPrice: Money }
+export interface CreateSaleInput { requestId: string; lines: SaleLineInput[]; accountId: string; occurredAt: string; note?: string | null }
+export interface ReceiveStockInput { requestId: string; productId: string; quantity: number; amount: Money; accountId: string; occurredAt: string; note?: string | null }
+export interface CancelProductOperationInput { requestId: string; operationId: string; reason: string }

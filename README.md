@@ -16,6 +16,19 @@ Application desktop locale de gestion d’un multiservices au Sénégal : invent
 - clé quotidienne protégée par le PIN et le coffre système (Trousseau macOS ou Gestionnaire d’identifiants Windows) ;
 - sauvegardes automatiques chiffrées et restauration par mot de passe de récupération.
 
+## Produits et ventes
+
+Le catalogue permet de saisir le prix de vente et le stock initial déjà détenu (sans dépense supplémentaire). Le gérant peut ensuite :
+
+- vendre plusieurs produits à la fois avec un prix ajustable et un compte d’encaissement précis ;
+- recevoir du stock en enregistrant automatiquement le montant total payé comme achat ;
+- corriger les quantités après comptage, avec un motif et sans mouvement d’argent ;
+- annuler une opération complète, depuis son détail ou le journal, avec une correction simultanée du stock et du budget.
+
+Les ventes augmentent le **Capital attendu** du montant encaissé et les achats le diminuent. Les soldes vérifiés restent ceux du dernier inventaire financier. Le stock est suivi en unités entières et sa valeur n’est pas ajoutée au capital. L’historique conserve les noms et tarifs d’origine. Un produit à stock nul peut être archivé ; annuler une ancienne vente le réactive si des articles reviennent en stock.
+
+Les écritures automatiques figurent déjà dans les rapports et exports : ne les ressaisissez pas dans le journal. La migration vers le schéma 3 conserve les comptes et données précédentes, avec sauvegarde chiffrée préalable et prise en charge des anciennes sauvegardes.
+
 ## Architecture
 
 - `src/` : interface React 19 + TypeScript + Vite ;
@@ -121,5 +134,5 @@ Le mot de passe de récupération doit être conservé hors du PC. Il est indisp
 - un seul PC, une seule boutique et un seul profil gérant ;
 - pas de synchronisation cloud ;
 - pas de connexion aux API Orange Money, Wave ou Djamo ;
-- pas de gestion de stock ;
+- ventes de produits payées intégralement, sans crédit ni retour partiel ;
 - les soldes affichés sont ceux du dernier inventaire validé.

@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  Product, ProductOperation, StockMovement, CreateProductInput, UpdateProductInput, ArchiveProductInput,
+  AdjustStockInput, CreateSaleInput, ReceiveStockInput, CancelProductOperationInput,
   Account, AccountBalanceInput, OpeningAccount, OpeningPreview, CreateAccountInput, UpdateAccountInput,
   CloseInventoryInput, InventoryCorrectionInput, CreateJournalEntryInput, CreateDebtInput, RecordPaymentInput,
   AuditEvent,
@@ -37,6 +39,16 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 }
 
 export const api = {
+  products: () => call<Product[]>("list_products"),
+  createProduct: (input: CreateProductInput) => call<Product>("create_product", { input }),
+  updateProduct: (input: UpdateProductInput) => call<Product>("update_product", { input }),
+  archiveProduct: (input: ArchiveProductInput) => call<Product>("archive_product", { input }),
+  adjustStock: (input: AdjustStockInput) => call<Product>("adjust_stock", { input }),
+  createSale: (input: CreateSaleInput) => call<ProductOperation>("create_product_sale", { input }),
+  receiveStock: (input: ReceiveStockInput) => call<ProductOperation>("receive_stock", { input }),
+  productOperations: () => call<ProductOperation[]>("list_product_operations"),
+  cancelProductOperation: (input: CancelProductOperationInput) => call<ProductOperation>("cancel_product_operation", { input }),
+  stockMovements: (productId?: string) => call<StockMovement[]>("list_stock_movements", { productId }),
   accounts: () => call<Account[]>("list_accounts"),
   createAccount: (input: CreateAccountInput) => call<Account>("create_account", { input }),
   updateAccount: (input: UpdateAccountInput) => call<Account>("update_account", { input }),

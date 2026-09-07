@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   LockKeyhole,
   Settings,
+  Package,
   WalletCards
 } from "lucide-react";
 import type { Dashboard, PageId } from "../types";
@@ -16,6 +17,7 @@ const navigation: Array<{ id: PageId; label: string; icon: typeof LayoutDashboar
   { id: "dashboard", label: "Tableau de bord", icon: LayoutDashboard },
   { id: "inventory", label: "Nouvel inventaire", icon: Clock3 },
   { id: "history", label: "Historique", icon: FileClock },
+  { id: "products", label: "Produits et ventes", icon: Package },
   { id: "journal", label: "Journal boutique", icon: BookOpenText },
   { id: "debts", label: "Dettes clients", icon: HandCoins },
   { id: "reports", label: "Rapports", icon: BarChart3 },
@@ -41,11 +43,11 @@ export function AppShell({
         <div className="sidebar-brand"><div className="brand-mark"><WalletCards /></div><div><strong>Kër Finance</strong><span>Gestion multiservices</span></div></div>
         <nav>
           <p>GESTION</p>
-          {navigation.slice(0, 5).map(({ id, label, icon: Icon }) => (
+          {navigation.slice(0, 6).map(({ id, label, icon: Icon }) => (
             <button className={page === id ? "active" : ""} key={id} onClick={() => onNavigate(id)}><Icon size={19} /><span>{label}</span>{id === "debts" && dashboard.overdueDebtsCount > 0 && <b>{dashboard.overdueDebtsCount}</b>}</button>
           ))}
           <p>ANALYSE & SYSTÈME</p>
-          {navigation.slice(5).map(({ id, label, icon: Icon }) => (
+          {navigation.slice(6).map(({ id, label, icon: Icon }) => (
             <button className={page === id ? "active" : ""} key={id} onClick={() => onNavigate(id)}><Icon size={19} /><span>{label}</span></button>
           ))}
         </nav>

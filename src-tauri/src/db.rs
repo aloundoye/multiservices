@@ -15,7 +15,7 @@ use crate::{
     models::*,
 };
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 pub fn open_database(path: &Path, database_key: &[u8]) -> AppResult<Connection> {
     let connection = Connection::open(path)?;
@@ -52,33 +52,37 @@ pub fn migrate(connection: &Connection) -> AppResult<()> {
         if version == 0 {
             migrate_v1(&tx)?;
         }
-        let debt_count: i64 = tx.query_row("SELECT count(*) FROM debts", [], |r| r.get(0))?;
-        let inventory_count: i64 =
-            tx.query_row("SELECT count(*) FROM inventories", [], |r| r.get(0))?;
-        tx.execute_batch(include_str!("migration_v2.sql"))?;
-        let migrated_debts: i64 = tx.query_row("SELECT count(*) FROM debts", [], |r| r.get(0))?;
-        let migrated_balances: i64 =
-            tx.query_row("SELECT count(*) FROM inventory_account_balances", [], |r| {
-                r.get(0)
-            })?;
-        if debt_count != migrated_debts || migrated_balances != inventory_count * 4 {
-            return Err(AppError::Validation(
-                "Migration interrompue : données historiques incomplètes.".into(),
-            ));
+        if version < 2 {
+            let debt_count: i64 = tx.query_row("SELECT count(*) FROM debts", [], |r| r.get(0))?;
+            let inventory_count: i64 =
+                tx.query_row("SELECT count(*) FROM inventories", [], |r| r.get(0))?;
+            tx.execute_batch(include_str!("migration_v2.sql"))?;
+            let migrated_debts: i64 =
+                tx.query_row("SELECT count(*) FROM debts", [], |r| r.get(0))?;
+            let migrated_balances: i64 =
+                tx.query_row("SELECT count(*) FROM inventory_account_balances", [], |r| {
+                    r.get(0)
+                })?;
+            if debt_count != migrated_debts || migrated_balances != inventory_count * 4 {
+                return Err(AppError::Validation(
+                    "Migration interrompue : données historiques incomplètes.".into(),
+                ));
+            }
         }
+        tx.execute_batch(include_str!("migration_v3.sql"))?;
         let broken = tx.prepare("PRAGMA foreign_key_check")?.exists([])?;
         if broken {
             return Err(AppError::Validation(
                 "Migration interrompue : références invalides.".into(),
             ));
         }
-        if version == 1 {
+        if version > 0 {
             audit_tx(
                 &tx,
                 "schema_migrated",
                 "business",
                 Some("1"),
-                json!({"from":1,"to":2}),
+                json!({"from":version,"to":SCHEMA_VERSION}),
             )?;
         }
         tx.commit()?;
@@ -654,6 +658,7 @@ pub fn create_inventory_correction(
 
 fn map_journal_row(row: &Row<'_>) -> rusqlite::Result<JournalEntry> {
     Ok(JournalEntry {
+        product_operation: None,
         account_snapshot: AccountSnapshot {
             account_id: row.get(11)?,
             provider: row.get(4)?,
@@ -684,12 +689,15 @@ pub fn list_journal_entries(
                 EXISTS(SELECT 1 FROM journal_entries r WHERE r.reverses_id = j.id) AS reversed, j.account_id, j.account_name, j.account_identifier
          FROM journal_entries j ORDER BY j.occurred_at DESC, j.posted_at DESC",
     )?;
-    let entries = statement
+    let mut entries: Vec<JournalEntry> = statement
         .query_map([], map_journal_row)?
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
         .filter(|entry| filters.is_none_or(|f| date_in_filter(&entry.occurred_at, f)))
         .collect();
+    for entry in &mut entries {
+        entry.product_operation = crate::stock::journal_link(connection, &entry.id)?;
+    }
     Ok(entries)
 }
 
@@ -698,8 +706,17 @@ pub fn create_journal_entry(
     input: CreateJournalEntryInput,
 ) -> AppResult<JournalEntry> {
     let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let result = create_journal_entry_tx(&tx, input)?;
+    tx.commit()?;
+    Ok(result)
+}
+
+pub(crate) fn create_journal_entry_tx(
+    tx: &Transaction<'_>,
+    input: CreateJournalEntryInput,
+) -> AppResult<JournalEntry> {
     let signed_amount = signed_journal_amount(&input.entry_type, input.amount)?;
-    let account = accounts::get(&tx, &input.account_id, true)?.snapshot;
+    let account = accounts::get(tx, &input.account_id, true)?.snapshot;
     let occurred_at = validate_date(&input.occurred_at, "La date")?;
     let reference = clean_optional(input.reference);
     let note = clean_optional(input.note);
@@ -723,7 +740,7 @@ pub fn create_journal_entry(
         ],
     )?;
     audit_tx(
-        &tx,
+        tx,
         "journal_entry_created",
         "journal_entry",
         Some(&id),
@@ -734,8 +751,7 @@ pub fn create_journal_entry(
             "account": account
         }),
     )?;
-    tx.commit()?;
-    connection
+    tx
         .query_row(
             "SELECT j.id, j.entry_type, j.amount, j.signed_amount, j.payment_account,
                     j.occurred_at, j.posted_at, j.reference, j.note, j.reverses_id, 0, j.account_id, j.account_name, j.account_identifier
@@ -751,6 +767,15 @@ pub fn reverse_journal_entry(
     input: ReverseEntryInput,
 ) -> AppResult<JournalEntry> {
     let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let result = reverse_journal_entry_tx(&tx, input)?;
+    tx.commit()?;
+    Ok(result)
+}
+
+pub(crate) fn reverse_journal_entry_tx(
+    tx: &Transaction<'_>,
+    input: ReverseEntryInput,
+) -> AppResult<JournalEntry> {
     let reason = clean_required(&input.reason, "Le motif", 3)?;
     let original: JournalEntry = tx
         .query_row(
@@ -768,6 +793,7 @@ pub fn reverse_journal_entry(
             "Cette écriture est déjà une correction ou a déjà été corrigée.".into(),
         ));
     }
+    crate::stock::reverse_stock_tx(tx, &original.id, &reason)?;
     let signed_amount = original
         .signed_amount
         .checked_neg()
@@ -791,15 +817,17 @@ pub fn reverse_journal_entry(
             original.account_snapshot.account_id, original.account_snapshot.name, original.account_snapshot.identifier
         ],
     )?;
+    if crate::stock::journal_link(tx, &original.id)?.is_some() {
+        crate::stock::check_capital(tx)?;
+    }
     audit_tx(
-        &tx,
+        tx,
         "journal_entry_reversed",
         "journal_entry",
         Some(&original.id),
         json!({ "reversalId": id, "reason": reason }),
     )?;
-    tx.commit()?;
-    connection
+    tx
         .query_row(
             "SELECT j.id, j.entry_type, j.amount, j.signed_amount, j.payment_account,
                     j.occurred_at, j.posted_at, j.reference, j.note, j.reverses_id, 0, j.account_id, j.account_name, j.account_identifier
