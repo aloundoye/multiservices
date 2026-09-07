@@ -103,7 +103,7 @@ La commande construit d’abord le `.app` avec Tauri, puis crée le DMG avec l�
 Les fichiers sont générés dans :
 
 - `src-tauri/target/release/bundle/macos/Kër Finance.app`
-- `src-tauri/target/release/bundle/dmg/Kër Finance_0.1.0_<architecture>.dmg`
+- `src-tauri/target/release/bundle/dmg/Kër Finance_0.3.0_<architecture>.dmg`
 
 Le build local n’est pas signé par Apple. Il fonctionne sur la machine de développement ; pour le distribuer à d’autres personnes sans alerte Gatekeeper, il faudra ajouter une signature Developer ID et une notarisation Apple.
 
@@ -119,6 +119,35 @@ npm run tauri:build
 Les installateurs MSI et NSIS sont générés sous `src-tauri/target/release/bundle/`.
 
 Les tests comptables utilisent une base SQLite en mémoire et un test séparé vérifie SQLCipher avec une vraie base chiffrée. L’option avancée `cipher_memory_security` reste désactivée : avec OpenSSL statique sous Windows, son allocateur global provoque un `STATUS_STACK_OVERFLOW`. Cette option ne contrôle pas le chiffrement du fichier, qui reste actif via `PRAGMA key`.
+
+## Releases macOS et Windows
+
+Le workflow **Release installers** se déclenche lorsque vous poussez un tag `vX.Y.Z`. Il compile et teste nativement trois variantes :
+
+- `Ker-Finance_X.Y.Z_macos-arm64.dmg` pour les Mac Apple Silicon ;
+- `Ker-Finance_X.Y.Z_macos-x64.dmg` pour les Mac Intel ;
+- `Ker-Finance_X.Y.Z_windows-x64-setup.exe` pour Windows 64 bits.
+
+Après réussite des trois builds, les installateurs et `SHA256SUMS.txt` sont joints à un **brouillon de release GitHub**. Les artefacts de chaque build restent également disponibles pendant 30 jours dans l’onglet Actions. Le workflow vérifie que le tag, les manifestes npm/Tauri/Rust et leurs fichiers de verrouillage portent la même version, et que les trois builds proviennent du même commit.
+
+Pour la version 0.3.0, après avoir enregistré et poussé les changements :
+
+```bash
+npm run release:check
+git tag v0.3.0
+git push origin v0.3.0
+```
+
+Pour une prochaine version, mettez d’abord à jour les versions dans `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` et l’entrée du projet dans `src-tauri/Cargo.lock`. Créez ensuite le tag correspondant. Une fois le workflow présent sur la branche principale, **Actions → Release installers → Run workflow** permet aussi de relancer un tag existant. Une relance ne remplace que les fichiers d’un brouillon ; elle refuse de modifier une release déjà publiée.
+
+Vérifiez les installateurs sur les systèmes cibles avant de publier le brouillon. Les DMG de ce workflow sont signés ad hoc, sans notarisation Apple ; l’EXE Windows n’est pas signé par un certificat éditeur. La [documentation Tauri sur les releases GitHub](https://v2.tauri.app/distribute/pipelines/github/) décrit la configuration des certificats pour une distribution signée.
+
+Pour générer uniquement l’EXE sur une machine Windows :
+
+```powershell
+npm ci
+npm run tauri:build:windows
+```
 
 ## Sécurité et récupération
 

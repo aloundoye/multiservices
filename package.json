@@ -1,7 +1,7 @@
 {
   "name": "multiservices-senegal",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,7 +12,10 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "tauri:build:mac": "bash scripts/build-macos.sh"
+    "tauri:build:mac": "bash scripts/build-macos.sh",
+    "tauri:build:windows": "tauri build --ci --bundles nsis -- --locked",
+    "release:check": "node scripts/check-release-version.mjs",
+    "release:collect": "node scripts/collect-release.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

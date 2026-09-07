@@ -17,7 +17,11 @@ cleanup() {
 trap cleanup EXIT
 
 cd "${PROJECT_DIR}"
-npx tauri build --ci --bundles app
+node scripts/check-release-version.mjs
+npx tauri build --ci --bundles app -- --locked
+
+BUNDLE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${APP_PATH}/Contents/Info.plist")"
+[[ "${BUNDLE_VERSION}" == "${VERSION}" ]] || { printf 'Bundle version mismatch\n' >&2; exit 1; }
 
 mkdir -p "${DMG_DIR}"
 cp -R "${APP_PATH}" "${STAGING_DIR}/"
@@ -29,5 +33,7 @@ hdiutil create \
   -ov \
   -format UDZO \
   "${DMG_PATH}"
+
+hdiutil verify "${DMG_PATH}"
 
 printf '\nApplication : %s\nDMG         : %s\n' "${APP_PATH}" "${DMG_PATH}"
