@@ -136,14 +136,22 @@ jobs:
             fs.writeFileSync(path.join(directory, 'SHA256SUMS.txt'), sums);
             names.push('SHA256SUMS.txt');
             // A release tag must still point to the exact commit we built.
-            const tagged = await github.rest.repos.getCommit({ owner, repo, ref: `tags/${tag}` });
-            if (tagged.data.sha !== process.env.RELEASE_COMMIT) throw new Error('Release tag changed during the build.');
+            let tagged = (await github.rest.git.getRef({ owner, repo, ref: `tags/${tag}` })).data.object;
+            while (tagged.type === 'tag') {
+              tagged = (await github.rest.git.getTag({ owner, repo, tag_sha: tagged.sha })).data.object;
+            }
+            if (tagged.type !== 'commit' || tagged.sha !== process.env.RELEASE_COMMIT) {
+              throw new Error('Release tag changed during the build.');
+            }
             let release;
             try {
               release = (await github.rest.repos.getReleaseByTag({ owner, repo, tag })).data;
             } catch (error) {
               if (error.status !== 404) throw error;
-              release = (await github.rest.repos.createRelease({
+              // The tag endpoint only returns published releases; find an existing draft before retrying.
+              const releases = await github.paginate(github.rest.repos.listReleases, { owner, repo });
+              release = releases.find(item => item.tag_name === tag);
+              if (!release) release = (await github.rest.repos.createRelease({
                 owner, repo, tag_name: tag, target_commitish: process.env.RELEASE_COMMIT,
                 name: `Kër Finance ${version}`, draft: true, prerelease: false,
                 body: [
