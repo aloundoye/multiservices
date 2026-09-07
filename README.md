@@ -1,6 +1,32 @@
 # Kër Finance
 
-Application desktop locale de gestion d’un multiservices au Sénégal : inventaires Orange Money, Wave, Djamo et espèces, journal de boutique, dettes clients, rapports et sauvegardes chiffrées.
+Application desktop locale de gestion d’un multiservices au Sénégal : inventaires Orange Money, Wave, Djamo et espèces, produits, stock, ventes, journal de boutique, dettes clients, rapports et sauvegardes chiffrées.
+
+## Installer la version 0.3.0
+
+Les installateurs sont disponibles dans les [releases GitHub](https://github.com/aloundoye/multiservices/releases). Les versions en brouillon restent accessibles aux mainteneurs jusqu’à leur publication.
+
+| Système | Fichier à télécharger |
+| --- | --- |
+| Mac Apple Silicon (puces M1, M2, etc.) | `Ker-Finance_0.3.0_macos-arm64.dmg` |
+| Mac Intel | `Ker-Finance_0.3.0_macos-x64.dmg` |
+| Windows 64 bits (x64) | `Ker-Finance_0.3.0_windows-x64-setup.exe` |
+
+Sur macOS, ouvrez le DMG et glissez **Kër Finance** dans **Applications**. Sur Windows, lancez l’EXE et suivez l’assistant d’installation. Node.js, Rust et les outils de compilation ne sont nécessaires que pour le développement.
+
+Les applications macOS sont signées ad hoc, sans notarisation Apple ; l’installateur Windows n’a pas de signature éditeur. Le système peut donc afficher une alerte à l’ouverture.
+
+Chaque release contient `SHA256SUMS.txt`. Pour vérifier un téléchargement, comparez la somme calculée à la ligne correspondant au fichier :
+
+```bash
+# macOS : adapter le nom du fichier pour un Mac Intel.
+shasum -a 256 Ker-Finance_0.3.0_macos-arm64.dmg
+```
+
+```powershell
+# Windows PowerShell
+Get-FileHash .\Ker-Finance_0.3.0_windows-x64-setup.exe -Algorithm SHA256
+```
 
 ## Fonctionnalités
 
@@ -8,6 +34,7 @@ Application desktop locale de gestion d’un multiservices au Sénégal : invent
 - inventaires périodiques, comparaison par compte et justification des écarts ;
 - capital réel incluant les créances non soldées ;
 - recettes, commissions, apports, achats, dépenses et retraits de capital ;
+- catalogue de produits, suivi du stock, ventes et réapprovisionnements reliés au capital attendu ;
 - plusieurs comptes/SIM Orange Money, Wave et Djamo, avec une caisse espèces unique ;
 - dettes Orange Money/Wave/Djamo avec échéances et remboursements partiels sur le compte choisi ;
 - contre-écritures et journal d’audit immuable ;
@@ -27,7 +54,7 @@ Le catalogue permet de saisir le prix de vente et le stock initial déjà déten
 
 Les ventes augmentent le **Capital attendu** du montant encaissé et les achats le diminuent. Les soldes vérifiés restent ceux du dernier inventaire financier. Le stock est suivi en unités entières et sa valeur n’est pas ajoutée au capital. L’historique conserve les noms et tarifs d’origine. Un produit à stock nul peut être archivé ; annuler une ancienne vente le réactive si des articles reviennent en stock.
 
-Les écritures automatiques figurent déjà dans les rapports et exports : ne les ressaisissez pas dans le journal. La migration vers le schéma 3 conserve les comptes et données précédentes, avec sauvegarde chiffrée préalable et prise en charge des anciennes sauvegardes.
+Les écritures automatiques figurent déjà dans les rapports et exports : ne les ressaisissez pas dans le journal. La migration vers le schéma 3 conserve les comptes et données précédentes ; les anciennes sauvegardes restent restaurables.
 
 ## Architecture
 
@@ -36,6 +63,8 @@ Les écritures automatiques figurent déjà dans les rapports et exports : ne le
 - `src-tauri/src/db.rs` : schéma SQLite et transactions métier ;
 - `src-tauri/src/accounts.rs` : comptes, validations, soldes et variations ;
 - `src-tauri/src/migration_v2.sql` : migration transactionnelle multi-comptes ;
+- `src-tauri/src/stock.rs` : catalogue, ventes, réapprovisionnements et mouvements de stock ;
+- `src-tauri/src/migration_v3.sql` : tables des produits et liens entre stock et journal ;
 - `src-tauri/src/security.rs` : enveloppes de clés et chiffrement ;
 - `src-tauri/src/backup.rs` : sauvegarde, rétention, contrôle et restauration ;
 - `src-tauri/src/export.rs` : exports PDF, XLSX et CSV.
@@ -57,18 +86,20 @@ Ensuite, **Paramètres → Comptes et SIM** permet de créer, renommer, archiver
 
 ## Mise à niveau des données et sauvegardes
 
-Le schéma SQLite passe de 1 à 2 au prochain déverrouillage. Avant tout changement, l’application crée et vérifie une sauvegarde chiffrée `avant-migration-v1-….msbackup` dans son dossier de sauvegardes. Si cette étape échoue, la migration s’arrête et les données restent en version 1.
+La version 0.3.0 utilise le **schéma SQLite 3**. Les bases en version 1 ou 2 sont migrées au prochain déverrouillage. Conservez une sauvegarde chiffrée externe avant une mise à niveau.
 
-La migration crée les comptes Orange Money — Principal, Wave — Principal, Djamo — Principal et Espèces. Les montants, dates, références, corrections et écarts restent inchangés. Les anciens soldes sont explicitement marqués « historique regroupé par service » : aucune répartition ancienne entre SIM n’est inventée. La migration est atomique, auditée et ne s’exécute qu’une fois.
+Depuis le schéma 1, l’application crée et vérifie d’abord une sauvegarde chiffrée `avant-migration-v1-….msbackup`. Si cette étape échoue, les données restent en version 1. La migration ajoute les comptes Orange Money — Principal, Wave — Principal, Djamo — Principal et Espèces. Les anciens soldes sont marqués « historique regroupé par service » : aucune répartition ancienne entre SIM n’est inventée.
 
-Les sauvegardes version 2 contiennent tous les comptes, y compris archivés, leurs relevés et leurs libellés historiques. Une sauvegarde version 1 est déchiffrée, contrôlée puis migrée dans une copie temporaire avant de remplacer les données actives. Un mot de passe incorrect ou une migration invalide interrompt la restauration. Ne rouvrez pas une base version 2 avec l’ancienne application ; conservez une copie externe de la sauvegarde préalable.
+Le passage au schéma 3 ajoute les produits, ventes, réapprovisionnements et mouvements de stock. Les montants, dates, références, corrections, écarts et comptes existants sont conservés. La migration est atomique, auditée et ne s’exécute qu’une fois.
+
+Les sauvegardes au schéma 3 contiennent les comptes, leurs relevés et libellés historiques, ainsi que les produits et opérations de stock. Une sauvegarde au schéma 1 ou 2 est déchiffrée, contrôlée puis migrée dans une copie temporaire avant de remplacer les données actives. Un mot de passe incorrect ou une migration invalide interrompt la restauration. Ne rouvrez pas une base au schéma 3 avec une ancienne version de l’application.
 
 ## Développement
 
-Prérequis : Node.js 20+, Rust stable et les [prérequis Tauri 2](https://v2.tauri.app/start/prerequisites/).
+Prérequis : Node.js 24 (version utilisée en CI), Rust stable et les [prérequis Tauri 2](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
-npm install
+npm ci
 npm run tauri:dev
 ```
 
@@ -77,24 +108,19 @@ Vérifications :
 ```bash
 npm run build
 npm test
-cargo test --manifest-path src-tauri/Cargo.toml --all-targets
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets
+cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+npm run release:check
 ```
 
-## Utiliser et installer sur macOS
+## Générer un DMG sur macOS
 
-Prérequis : macOS 11 ou plus récent, Xcode Command Line Tools, Node.js 20+ et Rust stable.
-
-Lancer l’application en développement :
-
-```bash
-npm install
-npm run tauri:dev
-```
+Prérequis : macOS 11 ou plus récent, Xcode Command Line Tools, Node.js 24 et Rust stable.
 
 Créer l’application macOS et l’image d’installation DMG :
 
 ```bash
+npm ci
 npm run tauri:build:mac
 ```
 
@@ -105,49 +131,48 @@ Les fichiers sont générés dans :
 - `src-tauri/target/release/bundle/macos/Kër Finance.app`
 - `src-tauri/target/release/bundle/dmg/Kër Finance_0.3.0_<architecture>.dmg`
 
-Le build local n’est pas signé par Apple. Il fonctionne sur la machine de développement ; pour le distribuer à d’autres personnes sans alerte Gatekeeper, il faudra ajouter une signature Developer ID et une notarisation Apple.
+Le DMG est généré pour l’architecture du Mac qui exécute la commande (`arm64` ou `x86_64`). Pour reproduire la signature ad hoc utilisée en CI, exécutez `APPLE_SIGNING_IDENTITY=- npm run tauri:build:mac`. Une distribution notarisée nécessite une signature Developer ID et une notarisation Apple.
 
 ## Générer les installateurs Windows
 
-Exécuter sur Windows 10/11 avec Microsoft C++ Build Tools et WebView2 :
-
-```powershell
-npm ci
-npm run tauri:build
-```
-
-Les installateurs MSI et NSIS sont générés sous `src-tauri/target/release/bundle/`.
-
-Les tests comptables utilisent une base SQLite en mémoire et un test séparé vérifie SQLCipher avec une vraie base chiffrée. L’option avancée `cipher_memory_security` reste désactivée : avec OpenSSL statique sous Windows, son allocateur global provoque un `STATUS_STACK_OVERFLOW`. Cette option ne contrôle pas le chiffrement du fichier, qui reste actif via `PRAGMA key`.
-
-## Releases macOS et Windows
-
-Le workflow **Release installers** se déclenche lorsque vous poussez un tag `vX.Y.Z`. Il compile et teste nativement trois variantes :
-
-- `Ker-Finance_X.Y.Z_macos-arm64.dmg` pour les Mac Apple Silicon ;
-- `Ker-Finance_X.Y.Z_macos-x64.dmg` pour les Mac Intel ;
-- `Ker-Finance_X.Y.Z_windows-x64-setup.exe` pour Windows 64 bits.
-
-Après réussite des trois builds, les installateurs et `SHA256SUMS.txt` sont joints à un **brouillon de release GitHub**. Les artefacts de chaque build restent également disponibles pendant 30 jours dans l’onglet Actions. Le workflow vérifie que le tag, les manifestes npm/Tauri/Rust et leurs fichiers de verrouillage portent la même version, et que les trois builds proviennent du même commit.
-
-Pour la version 0.3.0, après avoir enregistré et poussé les changements :
-
-```bash
-npm run release:check
-git tag v0.3.0
-git push origin v0.3.0
-```
-
-Pour une prochaine version, mettez d’abord à jour les versions dans `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` et l’entrée du projet dans `src-tauri/Cargo.lock`. Créez ensuite le tag correspondant. Une fois le workflow présent sur la branche principale, **Actions → Release installers → Run workflow** permet aussi de relancer un tag existant. Une relance ne remplace que les fichiers d’un brouillon ; elle refuse de modifier une release déjà publiée.
-
-Vérifiez les installateurs sur les systèmes cibles avant de publier le brouillon. Les DMG de ce workflow sont signés ad hoc, sans notarisation Apple ; l’EXE Windows n’est pas signé par un certificat éditeur. La [documentation Tauri sur les releases GitHub](https://v2.tauri.app/distribute/pipelines/github/) décrit la configuration des certificats pour une distribution signée.
-
-Pour générer uniquement l’EXE sur une machine Windows :
+Exécuter sur Windows avec Node.js 24, Rust stable, Microsoft C++ Build Tools et WebView2 :
 
 ```powershell
 npm ci
 npm run tauri:build:windows
 ```
+
+L’installateur EXE NSIS est généré dans `src-tauri/target/release/bundle/nsis/`. Pour générer à la fois le MSI et l’EXE NSIS, utilisez `npm run tauri:build` ; les sorties se trouvent dans les sous-dossiers `msi/` et `nsis/` de `src-tauri/target/release/bundle/`.
+
+Les tests comptables utilisent une base SQLite en mémoire et un test séparé vérifie SQLCipher avec une vraie base chiffrée. L’option avancée `cipher_memory_security` reste désactivée : avec OpenSSL statique sous Windows, son allocateur global provoque un `STATUS_STACK_OVERFLOW`. Cette option ne contrôle pas le chiffrement du fichier, qui reste actif via `PRAGMA key`.
+
+## Releases macOS et Windows
+
+Le workflow [Release installers](.github/workflows/release.yml) se déclenche lorsque vous poussez un tag `vX.Y.Z`. GitHub Actions compile sur des runners macOS et Windows : vous pouvez déclencher les trois builds depuis votre Mac sans y installer de compilateur Windows. Les variantes générées sont :
+
+- `Ker-Finance_X.Y.Z_macos-arm64.dmg` pour les Mac Apple Silicon ;
+- `Ker-Finance_X.Y.Z_macos-x64.dmg` pour les Mac Intel ;
+- `Ker-Finance_X.Y.Z_windows-x64-setup.exe` pour Windows 64 bits.
+
+Chaque variante exécute les tests frontend et Rust, le build frontend et Clippy avant de générer son installateur. Après réussite des trois builds, les installateurs et `SHA256SUMS.txt` sont joints à un **brouillon de release GitHub**. Les artefacts `installer-macos-arm64`, `installer-macos-x64` et `installer-windows-x64` restent également disponibles pendant 30 jours dans l’onglet Actions. Le workflow vérifie que le tag, les manifestes npm/Tauri/Rust et leurs fichiers de verrouillage portent la même version, et que les trois builds proviennent du même commit.
+
+Pour une prochaine version :
+
+1. Mettez à jour `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` et l’entrée du projet dans `src-tauri/Cargo.lock`.
+2. Exécutez les vérifications, puis enregistrez et poussez les changements, y compris le workflow de release.
+3. Créez et poussez le tag correspondant à la nouvelle version. Par exemple, après passage à **0.3.1** :
+
+```bash
+npm run release:check -- v0.3.1
+git tag -a v0.3.1 -m "Kër Finance 0.3.1"
+git push origin v0.3.1
+```
+
+Le tag `v0.3.0` existe déjà : ne le recréez pas et ne le déplacez pas. Une fois le workflow présent sur la branche principale, **Actions → Release installers → Run workflow** permet de relancer un tag existant. Sélectionnez la branche contenant le workflow à jour et indiquez le tag à reconstruire. Le code de l’application est toujours extrait du commit de ce tag. Une relance réutilise le brouillon existant et remplace ses fichiers ; elle refuse de modifier une release déjà publiée.
+
+Vérifiez les installateurs sur les systèmes cibles avant de publier le brouillon. Les DMG de ce workflow sont signés ad hoc, sans notarisation Apple ; l’EXE Windows n’est pas signé par un certificat éditeur. La [documentation Tauri sur les releases GitHub](https://v2.tauri.app/distribute/pipelines/github/) décrit la configuration des certificats pour une distribution signée.
+
+La publication du brouillon reste une action manuelle depuis la page de release GitHub.
 
 ## Sécurité et récupération
 
