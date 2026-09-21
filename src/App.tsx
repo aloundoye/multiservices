@@ -6,6 +6,7 @@ import { LoginScreen, SetupScreen } from "./screens/AuthScreens";
 import { DashboardPage } from "./screens/DashboardPage";
 import { DebtsPage } from "./screens/DebtsPage";
 import { InventoryHistoryPage, InventoryPage } from "./screens/InventoryPages";
+import { CustodyPage } from "./screens/CustodyPage";
 import { ProductsPage } from "./screens/ProductsPage";
 import { JournalPage } from "./screens/JournalPage";
 import { ReportsPage } from "./screens/ReportsPage";
@@ -20,6 +21,7 @@ export default function App() {
   const [page, setPage] = useState<PageId>("dashboard");
   const [fatalError, setFatalError] = useState("");
   const [toast, setToast] = useState("");
+  const [custodyAction, setCustodyAction] = useState<"deposit" | "withdrawal">();
 
   useEffect(() => {
     api.checkSetup()
@@ -70,9 +72,10 @@ export default function App() {
 
   const content = (() => {
     switch (page) {
-      case "dashboard": return <DashboardPage dashboard={dashboard} onNavigate={setPage} />;
-      case "inventory": return <InventoryPage dashboard={dashboard} onDone={setToast} />;
+      case "dashboard": return <DashboardPage dashboard={dashboard} onNavigate={setPage} onCustodyAction={(action) => { setCustodyAction(action); setPage("custody"); }} />;
+      case "inventory": return <InventoryPage dashboard={dashboard} onDone={(message) => { setToast(message); void refresh(); }} />;
       case "history": return <InventoryHistoryPage onChanged={() => void refresh()} notify={setToast} />;
+      case "custody": return <CustodyPage onChanged={refresh} notify={setToast} initialAction={custodyAction} />;
       case "products": return <ProductsPage onChanged={refresh} notify={setToast} />;
       case "journal": return <JournalPage onChanged={() => void refresh()} notify={setToast} />;
       case "debts": return <DebtsPage onChanged={() => void refresh()} notify={setToast} />;
@@ -83,7 +86,7 @@ export default function App() {
 
   return (
     <>
-      <AppShell page={page} dashboard={dashboard} onNavigate={(next) => { setPage(next); void refresh(); }} onLock={handleLock}>{content}</AppShell>
+      <AppShell page={page} dashboard={dashboard} onNavigate={(next) => { setCustodyAction(undefined); setPage(next); void refresh(); }} onLock={handleLock}>{content}</AppShell>
       {toast && <div className="toast"><CheckCircle2 /><span>{toast}</span><button onClick={() => setToast("")}><X /></button></div>}
     </>
   );

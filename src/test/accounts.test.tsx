@@ -24,18 +24,20 @@ const accounts: Account[] = [
 ];
 const totals = { orangeMoney: 1_500_000, wave: 1_200_000, djamo: 800_000, cash: 1_500_000 };
 const inventory: Inventory = {
+  custodyTotal: 0, custodySequence: 0, custodyBalances: [],
   id: "opening", kind: "opening", closedAt: "2026-09-01T08:00:00Z", balances: totals,
   accountBalances: accounts.filter((a) => a.active).map((a) => ({ ...a, amount: a.lastBalance!, delta: null, legacy: false })),
   receivables: 0, liquidity: 5_000_000, expectedTotal: 5_000_000, actualTotal: 5_000_000, variance: 0,
   delta: { orangeMoney: 0, wave: 0, djamo: 0, cash: 0 }
 };
 const dashboard: Dashboard = {
+  custodyTotal: 0, custodyCustomersCount: 0,
   accounts, lastInventory: inventory, expectedCapital: 5_000_000, lastActualCapital: 5_000_000,
   openReceivables: 0, openDebtsCount: 0, overdueDebtsCount: 0, journalNetSinceInventory: 0,
   nextInventoryAt: "2026-09-01T12:00:00Z", inventoryOverdue: false,
   settings: { businessName: "Boutique", currency: "XOF", timezone: "Africa/Dakar", inventoryIntervalMinutes: 240, autoLockMinutes: 15, createdAt: inventory.closedAt }
 };
-const preview: InventoryPreview = { ...inventory, previousBalances: totals };
+const preview: InventoryPreview = { ...inventory, custodyTotal: 0, previousBalances: totals };
 
 beforeEach(() => {
   vi.resetAllMocks();

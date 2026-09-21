@@ -325,7 +325,7 @@ fn migration_from_v2_preserves_history_and_runs_once() {
     db.pragma_update(None, "foreign_keys", true).unwrap();
     let before = fixture::historical_data(&db);
     db::migrate(&db).unwrap();
-    assert_eq!(db::schema_version(&db).unwrap(), 3);
+    assert_eq!(db::schema_version(&db).unwrap(), db::SCHEMA_VERSION);
     assert_eq!(before, fixture::historical_data(&db));
     assert!(products(&db).unwrap().is_empty());
     let saved = counts(&db);

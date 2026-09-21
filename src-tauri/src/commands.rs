@@ -366,3 +366,67 @@ pub fn cancel_product_operation(
         .with_connection(|c| crate::stock::cancel_operation(c, input))
         .map_err(command_error)
 }
+
+#[tauri::command]
+pub fn list_custody_customers(state: State<'_, AppState>) -> CommandResult<Vec<CustodyCustomer>> {
+    state
+        .with_connection(|c| crate::custody::customers(c))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn list_custody_movements(state: State<'_, AppState>) -> CommandResult<Vec<CustodyMovement>> {
+    state
+        .with_connection(|c| crate::custody::movements(c))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn save_custody_customer(
+    input: SaveCustodyCustomerInput,
+    state: State<'_, AppState>,
+) -> CommandResult<CustodyCustomer> {
+    state
+        .with_connection(|c| crate::custody::save_customer(c, input))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn record_custody_movement(
+    input: CreateCustodyMovementInput,
+    state: State<'_, AppState>,
+) -> CommandResult<CustodyMovement> {
+    state
+        .with_connection(|c| crate::custody::record(c, input))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn reverse_custody_movement(
+    input: ReverseCustodyMovementInput,
+    state: State<'_, AppState>,
+) -> CommandResult<CustodyMovement> {
+    state
+        .with_connection(|c| crate::custody::reverse(c, input))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn preview_custody_opening(
+    input: CustodyOpeningInput,
+    state: State<'_, AppState>,
+) -> CommandResult<CustodyOpeningPreview> {
+    state
+        .with_connection(|c| crate::custody::preview_opening(c, &input))
+        .map_err(command_error)
+}
+
+#[tauri::command]
+pub fn record_custody_opening(
+    input: CustodyOpeningInput,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<CustodyMovement>> {
+    state
+        .with_connection(|c| crate::custody::opening(c, input))
+        .map_err(command_error)
+}

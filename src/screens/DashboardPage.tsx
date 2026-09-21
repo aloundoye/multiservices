@@ -11,12 +11,13 @@ import {
   Landmark,
   Plus,
   Scale,
+  ShieldCheck,
   Wallet
 } from "lucide-react";
 import type { Dashboard, PageId } from "../types";
 import { formatDate, formatMoney, signed } from "../lib/format";
 
-export function DashboardPage({ dashboard, onNavigate }: { dashboard: Dashboard; onNavigate: (page: PageId) => void }) {
+export function DashboardPage({ dashboard, onNavigate, onCustodyAction }: { dashboard: Dashboard; onNavigate: (page: PageId) => void; onCustodyAction?: (action: "deposit" | "withdrawal") => void }) {
   const inventory = dashboard.lastInventory;
   const accounts = [
     { label: "Orange Money", value: inventory.balances.orangeMoney, delta: inventory.delta.orangeMoney, color: "orange", icon: Landmark },
@@ -44,13 +45,13 @@ export function DashboardPage({ dashboard, onNavigate }: { dashboard: Dashboard;
           <div className="metric-icon green"><Scale /></div>
           <span>Capital attendu</span>
           <strong>{formatMoney(dashboard.expectedCapital)}</strong>
-          <small><span className={dashboard.journalNetSinceInventory >= 0 ? "positive" : "negative"}>{signed(dashboard.journalNetSinceInventory)}</span> depuis le dernier inventaire</small>
+          <small><span className={dashboard.expectedCapital - dashboard.lastActualCapital >= 0 ? "positive" : "negative"}>{signed(dashboard.expectedCapital - dashboard.lastActualCapital)}</span> depuis le dernier inventaire</small>
         </article>
         <article className="metric-card">
           <div className="metric-icon blue"><Banknote /></div>
           <span>Dernier capital réel</span>
           <strong>{formatMoney(dashboard.lastActualCapital)}</strong>
-          <small>Liquidités et créances validées</small>
+          <small>Liquidités + créances − dépôts suivis</small>
         </article>
         <article className="metric-card">
           <div className="metric-icon amber"><HandCoins /></div>
@@ -66,9 +67,13 @@ export function DashboardPage({ dashboard, onNavigate }: { dashboard: Dashboard;
         </article>
       </section>
 
+      <section className="panel custody-dashboard">
+        <div className="metric-icon green"><ShieldCheck /></div><div><span>Argent gardé pour les clients</span><strong>{formatMoney(dashboard.custodyTotal)}</strong><small>{dashboard.custodyCustomersCount} client(s) ayant un solde · hors capital de la boutique</small></div>
+        <div className="custody-actions"><button className="button primary" onClick={() => onCustodyAction ? onCustodyAction("deposit") : onNavigate("custody")}>Recevoir un dépôt</button><button className="button secondary" onClick={() => onCustodyAction ? onCustodyAction("withdrawal") : onNavigate("custody")}>Restituer</button></div>
+      </section>
       <section className="dashboard-columns">
         <article className="panel balances-panel">
-          <header className="panel-header"><div><h2>Répartition des liquidités</h2><p>Soldes mesurés au dernier inventaire</p></div><span className="total-pill">{formatMoney(inventory.liquidity)}</span></header>
+          <header className="panel-header"><div><h2>Répartition des liquidités</h2><p>Soldes vérifiés au dernier inventaire, non actualisés par les opérations</p></div><span className="total-pill">{formatMoney(inventory.liquidity)}</span></header>
           <div className="account-list">
             {accounts.map(({ label, value, delta, color, icon: Icon }) => (
               <div className="account-row" key={label}>

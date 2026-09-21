@@ -69,6 +69,9 @@ impl AccountBalances {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Inventory {
+    pub custody_total: Option<Money>,
+    pub custody_sequence: i64,
+    pub custody_balances: Vec<CustodyBalanceSnapshot>,
     pub account_balances: Vec<AccountBalanceSnapshot>,
     pub id: String,
     pub kind: String,
@@ -93,6 +96,7 @@ pub struct InventoryPreviewInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InventoryPreview {
+    pub custody_total: Money,
     pub account_balances: Vec<AccountBalanceSnapshot>,
     pub balances: AccountBalances,
     pub previous_balances: AccountBalances,
@@ -229,6 +233,8 @@ pub struct CancelDebtInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Dashboard {
+    pub custody_total: Money,
+    pub custody_customers_count: i64,
     pub accounts: Vec<Account>,
     pub settings: BusinessSettings,
     pub last_inventory: Inventory,
@@ -263,6 +269,7 @@ pub struct ReportFilters {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportData {
+    pub custody: CustodyReport,
     pub generated_at: String,
     pub filters: ReportFilters,
     pub inventories: Vec<Inventory>,
@@ -522,4 +529,118 @@ pub struct StockMovement {
     pub reason: Option<String>,
     pub occurred_at: String,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustodyCustomer {
+    pub id: String,
+    pub name: String,
+    pub phone: Option<String>,
+    pub active: bool,
+    pub balance: Money,
+    pub total_received: Money,
+    pub total_withdrawn: Money,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveCustodyCustomerInput {
+    pub request_id: String,
+    pub customer_id: Option<String>,
+    pub name: String,
+    pub phone: Option<String>,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustodyMovement {
+    pub sequence: i64,
+    pub id: String,
+    pub customer_id: String,
+    pub customer_name: String,
+    pub customer_phone: Option<String>,
+    pub kind: String,
+    pub delta: Money,
+    pub capital_adjustment: Money,
+    pub balance_after: Money,
+    pub account_snapshot: Option<AccountSnapshot>,
+    pub occurred_at: String,
+    pub posted_at: String,
+    pub operator: String,
+    pub note: Option<String>,
+    pub reverses_id: Option<String>,
+    pub reversed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateCustodyMovementInput {
+    pub request_id: String,
+    pub customer_id: String,
+    pub kind: String,
+    pub amount: Money,
+    pub account_id: String,
+    pub occurred_at: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReverseCustodyMovementInput {
+    pub request_id: String,
+    pub movement_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustodyOpeningLine {
+    pub customer_id: String,
+    pub amount: Money,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustodyOpeningInput {
+    pub request_id: String,
+    pub lines: Vec<CustodyOpeningLine>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustodyOpeningPreview {
+    pub total: Money,
+    pub expected_capital: Money,
+    pub corrected_capital: Money,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustodyBalanceSnapshot {
+    pub customer_id: String,
+    pub customer_name: String,
+    pub customer_phone: Option<String>,
+    pub balance: Money,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustodyPeriodBalance {
+    pub customer_id: String,
+    pub customer_name: String,
+    pub opening_balance: Money,
+    pub increases: Money,
+    pub decreases: Money,
+    pub closing_balance: Money,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustodyReport {
+    pub balances: Vec<CustodyPeriodBalance>,
+    pub movements: Vec<CustodyMovement>,
+    pub opening_balance: Money,
+    pub closing_balance: Money,
 }

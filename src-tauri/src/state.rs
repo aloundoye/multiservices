@@ -57,7 +57,7 @@ impl AppState {
     }
 
     fn migrate_safely(&self, connection: &Connection, key: &[u8]) -> AppResult<()> {
-        if db::schema_version(connection)? == 1 {
+        if (1..db::SCHEMA_VERSION).contains(&db::schema_version(connection)?) {
             backup::before_migration(connection, key, &self.paths)?;
         }
         db::migrate(connection)

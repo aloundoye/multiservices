@@ -45,100 +45,281 @@ pub fn export_report(input: &ExportInput, report: &ReportData) -> AppResult<Stri
     Ok(destination.to_string_lossy().to_string())
 }
 
+const LEGACY_CUSTODY: &str = "Dépôts clients non suivis à cette date";
+fn custody_label(kind: &str) -> &str {
+    match kind {
+        "deposit" => "Dépôt reçu",
+        "withdrawal" => "Restitution",
+        "opening" => "Reprise antérieure",
+        "reversal" => "Annulation",
+        other => other,
+    }
+}
+fn csv_row<const N: usize>(writer: &mut csv::Writer<fs::File>, values: [&str; N]) -> AppResult<()> {
+    let mut row = values.to_vec();
+    row.resize(25, "");
+    writer.write_record(row)?;
+    Ok(())
+}
+
 fn export_csv(destination: &Path, report: &ReportData) -> AppResult<()> {
     let mut writer = csv::WriterBuilder::new()
         .delimiter(b';')
         .from_path(destination)?;
-    writer.write_record([
-        "type",
-        "date",
-        "libelle",
-        "compte_service",
-        "compte_id",
-        "compte_nom",
-        "compte_identifiant",
-        "montant_fcfa",
-        "solde_ou_ecart_fcfa",
-        "statut_note",
-    ])?;
+    csv_row(
+        &mut writer,
+        [
+            "type",
+            "date",
+            "libelle",
+            "compte_service",
+            "compte_id",
+            "compte_nom",
+            "compte_identifiant",
+            "montant_fcfa",
+            "solde_ou_ecart_fcfa",
+            "statut_note",
+            "client_id",
+            "client_telephone",
+            "mouvement_id",
+            "sequence",
+            "enregistre_le",
+            "auteur",
+            "annule_original",
+            "reclassement_capital_fcfa",
+            "solde_depart_fcfa",
+            "augmentations_fcfa",
+            "diminutions_fcfa",
+            "solde_fin_fcfa",
+            "inventaire_id",
+            "sequence_cloture",
+            "nature_mouvement",
+        ],
+    )?;
     for inventory in &report.inventories {
-        writer.write_record([
-            "inventaire",
-            &inventory.closed_at,
-            if inventory.kind == "opening" {
-                "Ouverture"
-            } else {
-                "Inventaire"
-            },
-            "tous",
-            "",
-            "",
-            "",
-            &inventory.actual_total.to_string(),
-            &inventory.variance.to_string(),
-            inventory.variance_note.as_deref().unwrap_or(""),
-        ])?;
+        csv_row(
+            &mut writer,
+            [
+                "inventaire",
+                &inventory.closed_at,
+                if inventory.kind == "opening" {
+                    "Ouverture"
+                } else {
+                    "Inventaire"
+                },
+                "tous",
+                "",
+                "",
+                "",
+                &inventory.actual_total.to_string(),
+                &inventory.variance.to_string(),
+                inventory.variance_note.as_deref().unwrap_or(""),
+            ],
+        )?;
     }
     for inventory in &report.inventories {
         for detail in &inventory.account_balances {
-            writer.write_record([
-                "solde_compte",
-                &inventory.closed_at,
-                "Détail inventaire (hors synthèse)",
-                &detail.account.provider,
-                &detail.account.account_id,
-                &detail.account.name,
-                detail.account.identifier.as_deref().unwrap_or(""),
-                &detail.amount.to_string(),
-                &detail.delta.map(|v| v.to_string()).unwrap_or_default(),
-                if detail.legacy {
-                    "Solde historique regroupé"
-                } else {
-                    ""
-                },
-            ])?;
+            csv_row(
+                &mut writer,
+                [
+                    "solde_compte",
+                    &inventory.closed_at,
+                    "Détail inventaire (hors synthèse)",
+                    &detail.account.provider,
+                    &detail.account.account_id,
+                    &detail.account.name,
+                    detail.account.identifier.as_deref().unwrap_or(""),
+                    &detail.amount.to_string(),
+                    &detail.delta.map(|v| v.to_string()).unwrap_or_default(),
+                    if detail.legacy {
+                        "Solde historique regroupé"
+                    } else {
+                        ""
+                    },
+                ],
+            )?;
         }
     }
     for entry in &report.journal {
-        writer.write_record([
-            "journal",
-            &entry.occurred_at,
-            &entry.entry_type,
-            &entry.payment_account,
-            &entry.account_snapshot.account_id,
-            &entry.account_snapshot.name,
-            entry.account_snapshot.identifier.as_deref().unwrap_or(""),
-            &entry.signed_amount.to_string(),
-            "",
-            entry.note.as_deref().unwrap_or(""),
-        ])?;
+        csv_row(
+            &mut writer,
+            [
+                "journal",
+                &entry.occurred_at,
+                &entry.entry_type,
+                &entry.payment_account,
+                &entry.account_snapshot.account_id,
+                &entry.account_snapshot.name,
+                entry.account_snapshot.identifier.as_deref().unwrap_or(""),
+                &entry.signed_amount.to_string(),
+                "",
+                entry.note.as_deref().unwrap_or(""),
+            ],
+        )?;
     }
     for debt in &report.debts {
-        writer.write_record([
-            "dette",
-            &debt.issued_at,
-            &debt.customer_name,
-            &debt.provider,
-            &debt.account_snapshot.account_id,
-            &debt.account_snapshot.name,
-            debt.account_snapshot.identifier.as_deref().unwrap_or(""),
-            &debt.principal.to_string(),
-            &debt.remaining.to_string(),
-            &debt.status,
-        ])?;
-        for payment in &debt.payments {
-            writer.write_record([
-                "remboursement",
-                &payment.paid_at,
+        csv_row(
+            &mut writer,
+            [
+                "dette",
+                &debt.issued_at,
                 &debt.customer_name,
-                &payment.account,
-                &payment.account_snapshot.account_id,
-                &payment.account_snapshot.name,
-                payment.account_snapshot.identifier.as_deref().unwrap_or(""),
-                &payment.amount.to_string(),
+                &debt.provider,
+                &debt.account_snapshot.account_id,
+                &debt.account_snapshot.name,
+                debt.account_snapshot.identifier.as_deref().unwrap_or(""),
+                &debt.principal.to_string(),
+                &debt.remaining.to_string(),
+                &debt.status,
+            ],
+        )?;
+        for payment in &debt.payments {
+            csv_row(
+                &mut writer,
+                [
+                    "remboursement",
+                    &payment.paid_at,
+                    &debt.customer_name,
+                    &payment.account,
+                    &payment.account_snapshot.account_id,
+                    &payment.account_snapshot.name,
+                    payment.account_snapshot.identifier.as_deref().unwrap_or(""),
+                    &payment.amount.to_string(),
+                    "",
+                    payment.note.as_deref().unwrap_or(""),
+                ],
+            )?;
+        }
+    }
+    for b in &report.custody.balances {
+        csv_row(
+            &mut writer,
+            [
+                "depot_solde_periode",
+                report.filters.to.as_deref().unwrap_or(""),
+                &b.customer_name,
                 "",
-                payment.note.as_deref().unwrap_or(""),
-            ])?;
+                "",
+                "",
+                "",
+                "",
+                "",
+                "Selon les dates déclarées; reprises et annulations comprises",
+                &b.customer_id,
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                &b.opening_balance.to_string(),
+                &b.increases.to_string(),
+                &b.decreases.to_string(),
+                &b.closing_balance.to_string(),
+            ],
+        )?;
+    }
+    for m in &report.custody.movements {
+        let account = m.account_snapshot.as_ref();
+        csv_row(
+            &mut writer,
+            [
+                "depot_mouvement",
+                &m.occurred_at,
+                &m.customer_name,
+                account.map(|a| a.provider.as_str()).unwrap_or(""),
+                account.map(|a| a.account_id.as_str()).unwrap_or(""),
+                account.map(|a| a.name.as_str()).unwrap_or(""),
+                account.and_then(|a| a.identifier.as_deref()).unwrap_or(""),
+                &m.delta.to_string(),
+                &m.balance_after.to_string(),
+                &format!(
+                    "{}{}",
+                    if m.reversed { "Annulé. " } else { "" },
+                    m.note.as_deref().unwrap_or("")
+                ),
+                &m.customer_id,
+                m.customer_phone.as_deref().unwrap_or(""),
+                &m.id,
+                &m.sequence.to_string(),
+                &m.posted_at,
+                &m.operator,
+                m.reverses_id.as_deref().unwrap_or(""),
+                &m.capital_adjustment.to_string(),
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                custody_label(&m.kind),
+            ],
+        )?;
+    }
+    for i in &report.inventories {
+        csv_row(
+            &mut writer,
+            [
+                "depot_total_cloture",
+                &i.closed_at,
+                "Dépôts à restituer",
+                "",
+                "",
+                "",
+                "",
+                &i.custody_total.map(|v| v.to_string()).unwrap_or_default(),
+                "",
+                if i.custody_total.is_none() {
+                    LEGACY_CUSTODY
+                } else {
+                    "Montant figé"
+                },
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                &i.id,
+                &i.custody_sequence.to_string(),
+            ],
+        )?;
+        for b in &i.custody_balances {
+            csv_row(
+                &mut writer,
+                [
+                    "depot_client_cloture",
+                    &i.closed_at,
+                    &b.customer_name,
+                    "",
+                    "",
+                    "",
+                    "",
+                    &b.balance.to_string(),
+                    "",
+                    "Montant figé",
+                    &b.customer_id,
+                    b.customer_phone.as_deref().unwrap_or(""),
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    &i.id,
+                    &i.custody_sequence.to_string(),
+                ],
+            )?;
         }
     }
     writer.flush()?;
@@ -169,6 +350,7 @@ fn export_xlsx(destination: &Path, report: &ReportData) -> AppResult<()> {
             "Capital réel",
             "Écart",
             "Justification",
+            "Dépôts à restituer",
         ];
         for (column, title) in titles.iter().enumerate() {
             sheet
@@ -199,6 +381,19 @@ fn export_xlsx(destination: &Path, report: &ReportData) -> AppResult<()> {
                 .write_string(row, 9, item.variance_note.as_deref().unwrap_or(""))
                 .map_err(xlsx_err)?;
         }
+        for (index, item) in report.inventories.iter().enumerate() {
+            let row = (index + 1) as u32;
+            if let Some(amount) = item.custody_total {
+                sheet
+                    .write_number_with_format(row, 10, amount as f64, &money)
+                    .map_err(xlsx_err)?;
+            } else {
+                sheet
+                    .write_string(row, 10, LEGACY_CUSTODY)
+                    .map_err(xlsx_err)?;
+            }
+        }
+        sheet.set_column_width(10, 45).map_err(xlsx_err)?;
         sheet.set_column_width(0, 22).map_err(xlsx_err)?;
         sheet.set_column_width(9, 38).map_err(xlsx_err)?;
         for column in 1..=8 {
@@ -433,9 +628,213 @@ fn export_xlsx(destination: &Path, report: &ReportData) -> AppResult<()> {
             }
         }
     }
+    custody_sheets(&mut workbook, report, &header, &money)?;
     workbook
         .save(destination)
         .map_err(|e| AppError::Export(e.to_string()))?;
+    Ok(())
+}
+
+fn custody_sheets(
+    workbook: &mut Workbook,
+    report: &ReportData,
+    header: &Format,
+    money: &Format,
+) -> AppResult<()> {
+    {
+        let sheet = workbook.add_worksheet();
+        sheet.set_name("Dépôts clients").map_err(xlsx_err)?;
+        for (col, title) in [
+            "Client ID",
+            "Client",
+            "Solde de départ",
+            "Augmentations",
+            "Diminutions",
+            "Solde de fin",
+            "Base de calcul",
+        ]
+        .iter()
+        .enumerate()
+        {
+            sheet
+                .write_string_with_format(0, col as u16, *title, header)
+                .map_err(xlsx_err)?;
+            sheet.set_column_width(col as u16, 28).map_err(xlsx_err)?;
+        }
+        for (idx, b) in report.custody.balances.iter().enumerate() {
+            let row = (idx + 1) as u32;
+            sheet
+                .write_string(row, 0, &b.customer_id)
+                .map_err(xlsx_err)?;
+            sheet
+                .write_string(row, 1, &b.customer_name)
+                .map_err(xlsx_err)?;
+            for (col, value) in [
+                b.opening_balance,
+                b.increases,
+                b.decreases,
+                b.closing_balance,
+            ]
+            .iter()
+            .enumerate()
+            {
+                sheet
+                    .write_number_with_format(row, (col + 2) as u16, *value as f64, money)
+                    .map_err(xlsx_err)?;
+            }
+            sheet
+                .write_string(row, 6, "Dates déclarées; reprises et annulations comprises")
+                .map_err(xlsx_err)?;
+        }
+    }
+    {
+        let sheet = workbook.add_worksheet();
+        sheet.set_name("Registre dépôts").map_err(xlsx_err)?;
+        for (col, title) in [
+            "Séquence",
+            "Mouvement ID",
+            "Date déclarée",
+            "Enregistré le",
+            "Client ID",
+            "Client à cette date",
+            "Téléphone",
+            "Nature",
+            "Compte ID",
+            "Compte à cette date",
+            "Variation dépôt",
+            "Solde après",
+            "Reclassement capital",
+            "Auteur",
+            "Note",
+            "Annule le mouvement",
+            "État",
+        ]
+        .iter()
+        .enumerate()
+        {
+            sheet
+                .write_string_with_format(0, col as u16, *title, header)
+                .map_err(xlsx_err)?;
+            sheet.set_column_width(col as u16, 26).map_err(xlsx_err)?;
+        }
+        for (idx, m) in report.custody.movements.iter().enumerate() {
+            let row = (idx + 1) as u32;
+            sheet
+                .write_number(row, 0, m.sequence as f64)
+                .map_err(xlsx_err)?;
+            for (col, value) in [
+                (1, m.id.clone()),
+                (2, m.occurred_at.clone()),
+                (3, m.posted_at.clone()),
+                (4, m.customer_id.clone()),
+                (5, m.customer_name.clone()),
+                (6, m.customer_phone.clone().unwrap_or_default()),
+                (7, custody_label(&m.kind).into()),
+                (
+                    8,
+                    m.account_snapshot
+                        .as_ref()
+                        .map(|a| a.account_id.clone())
+                        .unwrap_or_default(),
+                ),
+                (
+                    9,
+                    m.account_snapshot
+                        .as_ref()
+                        .map(|a| a.display_name())
+                        .unwrap_or_else(|| "Sans mouvement d’argent".into()),
+                ),
+                (13, m.operator.clone()),
+                (14, m.note.clone().unwrap_or_default()),
+                (15, m.reverses_id.clone().unwrap_or_default()),
+                (
+                    16,
+                    if m.reversed {
+                        "Annulé".into()
+                    } else {
+                        "Enregistré".into()
+                    },
+                ),
+            ] {
+                sheet.write_string(row, col, value).map_err(xlsx_err)?;
+            }
+            for (col, value) in [
+                (10, m.delta),
+                (11, m.balance_after),
+                (12, m.capital_adjustment),
+            ] {
+                sheet
+                    .write_number_with_format(row, col, value as f64, money)
+                    .map_err(xlsx_err)?;
+            }
+        }
+    }
+    {
+        let sheet = workbook.add_worksheet();
+        sheet.set_name("Dépôts aux clôtures").map_err(xlsx_err)?;
+        for (col, title) in [
+            "Inventaire ID",
+            "Date de clôture",
+            "Séquence limite",
+            "Type",
+            "Client ID",
+            "Client à la clôture",
+            "Téléphone",
+            "Dépôts à restituer",
+            "Suivi",
+        ]
+        .iter()
+        .enumerate()
+        {
+            sheet
+                .write_string_with_format(0, col as u16, *title, header)
+                .map_err(xlsx_err)?;
+            sheet.set_column_width(col as u16, 28).map_err(xlsx_err)?;
+        }
+        let mut row = 1;
+        for i in &report.inventories {
+            for (col, value) in [
+                (0, i.id.as_str()),
+                (1, i.closed_at.as_str()),
+                (3, "Total"),
+                (
+                    8,
+                    if i.custody_total.is_some() {
+                        "Montant figé"
+                    } else {
+                        LEGACY_CUSTODY
+                    },
+                ),
+            ] {
+                sheet.write_string(row, col, value).map_err(xlsx_err)?;
+            }
+            sheet
+                .write_number(row, 2, i.custody_sequence as f64)
+                .map_err(xlsx_err)?;
+            if let Some(amount) = i.custody_total {
+                sheet
+                    .write_number_with_format(row, 7, amount as f64, money)
+                    .map_err(xlsx_err)?;
+            }
+            row += 1;
+            for b in &i.custody_balances {
+                for (col, value) in [
+                    (0, i.id.as_str()),
+                    (1, i.closed_at.as_str()),
+                    (3, "Détail hors total"),
+                    (4, b.customer_id.as_str()),
+                    (5, b.customer_name.as_str()),
+                    (6, b.customer_phone.as_deref().unwrap_or("")),
+                ] {
+                    sheet.write_string(row, col, value).map_err(xlsx_err)?;
+                }
+                sheet
+                    .write_number_with_format(row, 7, b.balance as f64, money)
+                    .map_err(xlsx_err)?;
+                row += 1;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -477,6 +876,31 @@ fn export_pdf(destination: &Path, report: &ReportData) -> AppResult<()> {
             format_money(item.expected_total),
             format_money(item.variance)
         ));
+        lines.push(format!(
+            "  Liquidités {} | Créances {}",
+            format_money(item.liquidity),
+            format_money(item.receivables)
+        ));
+        lines.push(
+            item.custody_total
+                .map(|v| {
+                    format!(
+                        "  Dépôts à restituer {} | Séquence {}",
+                        format_money(v),
+                        item.custody_sequence
+                    )
+                })
+                .unwrap_or_else(|| LEGACY_CUSTODY.into()),
+        );
+        for b in &item.custody_balances {
+            lines.push(format!(
+                "  {} ({}) | {} | {}",
+                b.customer_name,
+                b.customer_id,
+                b.customer_phone.as_deref().unwrap_or(""),
+                format_money(b.balance)
+            ));
+        }
         for d in &item.account_balances {
             lines.push(format!(
                 "  {} | Solde {} | Variation {}{}",
@@ -527,18 +951,87 @@ fn export_pdf(destination: &Path, report: &ReportData) -> AppResult<()> {
         }
     }
 
+    lines.push(String::new());
+    lines.push("DÉPÔTS CLIENTS - HORS RECETTES ET DÉPENSES".into());
+    lines.push("Dates déclarées; reprises et annulations comprises.".into());
+    lines.push("Les mouvements antidatés peuvent modifier les soldes de période.".into());
+    lines.push(format!(
+        "Solde de départ {} | Solde de fin {}",
+        format_money(report.custody.opening_balance),
+        format_money(report.custody.closing_balance)
+    ));
+    for b in &report.custody.balances {
+        lines.push(format!("{} | {}", b.customer_name, b.customer_id));
+        lines.push(format!(
+            "  Départ {} | + {} | - {} | Fin {}",
+            format_money(b.opening_balance),
+            format_money(b.increases),
+            format_money(b.decreases),
+            format_money(b.closing_balance)
+        ));
+    }
+    for m in &report.custody.movements {
+        lines.push(format!(
+            "N° {} | {} | {} | {}",
+            m.sequence,
+            m.occurred_at,
+            m.customer_name,
+            custody_label(&m.kind)
+        ));
+        lines.push(format!(
+            "  {} | Variation {} | Solde après {}",
+            m.account_snapshot
+                .as_ref()
+                .map(|a| a.display_name())
+                .unwrap_or_else(|| "Sans mouvement d’argent".into()),
+            format_money(m.delta),
+            format_money(m.balance_after)
+        ));
+        lines.push(format!(
+            "  Enregistré {} par {} | Capital {}",
+            m.posted_at,
+            m.operator,
+            format_money(m.capital_adjustment)
+        ));
+        lines.push(format!("  ID {} | Client {}", m.id, m.customer_id));
+        if let Some(phone) = &m.customer_phone {
+            lines.push(format!("  Téléphone: {phone}"));
+        }
+        if let Some(id) = &m.reverses_id {
+            lines.push(format!("  Annule: {id}"));
+        }
+        if m.reversed {
+            lines.push("  Mouvement annulé".into());
+        }
+        if let Some(note) = &m.note {
+            lines.push(format!("  Note: {note}"));
+        }
+    }
+
     let lines: Vec<String> = lines
         .into_iter()
         .flat_map(|line| {
-            let chars: Vec<char> = line.chars().collect();
-            if chars.is_empty() {
-                vec![String::new()]
-            } else {
-                chars
-                    .chunks(82)
-                    .map(|chunk| chunk.iter().collect())
-                    .collect()
+            let mut wrapped = Vec::new();
+            let mut current = String::new();
+            for word in line.split_whitespace() {
+                if !current.is_empty() && current.chars().count() + 1 + word.chars().count() > 82 {
+                    wrapped.push(std::mem::take(&mut current));
+                }
+                // Very long unbroken notes must also stay inside the page.
+                for chunk in word.chars().collect::<Vec<_>>().chunks(82) {
+                    if !current.is_empty() {
+                        current.push(' ');
+                    }
+                    current.extend(chunk);
+                    if current.chars().count() >= 82 {
+                        wrapped.push(std::mem::take(&mut current));
+                    }
+                }
             }
+            if !current.is_empty() || wrapped.is_empty() {
+                wrapped.push(current);
+            }
+            wrapped
         })
         .collect();
     let mut document = PdfDocument::new("Rapport Kër Finance");
@@ -707,8 +1200,170 @@ mod tests {
         assert!(!text.contains("Nouveau nom"));
     }
 
+    #[test]
+    fn custody_exports_include_periods_ledger_and_frozen_closures_without_revenue() {
+        use crate::{custody, models::*};
+        use std::io::Read;
+        let mut db = multi_database();
+        let customer = custody::save_customer(
+            &mut db,
+            SaveCustodyCustomerInput {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                customer_id: None,
+                name: "Awa Fall".into(),
+                phone: Some("771234567".into()),
+                active: true,
+            },
+        )
+        .unwrap();
+        custody::opening(
+            &mut db,
+            CustodyOpeningInput {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                lines: vec![CustodyOpeningLine {
+                    customer_id: customer.id.clone(),
+                    amount: 200_000,
+                }],
+            },
+        )
+        .unwrap();
+        let cash = id(&db, "Espèces");
+        let deposit = custody::record(
+            &mut db,
+            CreateCustodyMovementInput {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                customer_id: customer.id.clone(),
+                kind: "deposit".into(),
+                amount: 50_000,
+                account_id: cash.clone(),
+                occurred_at: "2026-09-21".into(),
+                note: Some("Garde gratuite".into()),
+            },
+        )
+        .unwrap();
+        let values = balances(&db);
+        let closed = close(&mut db, values);
+        custody::reverse(
+            &mut db,
+            ReverseCustodyMovementInput {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                movement_id: deposit.id.clone(),
+                reason: "Erreur de saisie".into(),
+            },
+        )
+        .unwrap();
+        custody::save_customer(
+            &mut db,
+            SaveCustodyCustomerInput {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                customer_id: Some(customer.id.clone()),
+                name: "Awa nouveau nom".into(),
+                phone: None,
+                active: true,
+            },
+        )
+        .unwrap();
+        let report = db::get_report(
+            &db,
+            ReportFilters {
+                from: None,
+                to: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(report.total_positive, 0);
+        assert_eq!(report.total_negative, 0);
+        assert_eq!(report.custody.closing_balance, 200_000);
+        let temp = tempfile::tempdir().unwrap();
+        let csv_path = temp.path().join("deposits.csv");
+        export_csv(&csv_path, &report).unwrap();
+        let mut reader = csv::ReaderBuilder::new()
+            .delimiter(b';')
+            .from_path(&csv_path)
+            .unwrap();
+        assert_eq!(reader.headers().unwrap().len(), 25);
+        let records = reader.records().collect::<Result<Vec<_>, _>>().unwrap();
+        let period = records
+            .iter()
+            .find(|r| &r[0] == "depot_solde_periode")
+            .unwrap();
+        assert_eq!(&period[10], customer.id);
+        assert_eq!(&period[18], "0");
+        assert_eq!(&period[21], "200000");
+        assert_eq!(
+            records
+                .iter()
+                .filter(|r| &r[0] == "depot_mouvement")
+                .count(),
+            3
+        );
+        let frozen = records
+            .iter()
+            .find(|r| &r[0] == "depot_client_cloture" && r[22] == closed.id)
+            .unwrap();
+        assert_eq!(&frozen[7], "250000");
+        assert_eq!(&frozen[2], "Awa Fall");
+        let xlsx_path = temp.path().join("deposits.xlsx");
+        export_xlsx(&xlsx_path, &report).unwrap();
+        let mut zip = zip::ZipArchive::new(fs::File::open(&xlsx_path).unwrap()).unwrap();
+        let mut strings = String::new();
+        zip.by_name("xl/sharedStrings.xml")
+            .unwrap()
+            .read_to_string(&mut strings)
+            .unwrap();
+        assert!(strings.contains("Awa Fall"));
+        assert!(!strings.contains("Awa nouveau nom"));
+        assert!(strings.contains(&deposit.id));
+        assert!(strings.contains("Garde gratuite"));
+        let mut ledger = String::new();
+        zip.by_name("xl/worksheets/sheet7.xml")
+            .unwrap()
+            .read_to_string(&mut ledger)
+            .unwrap();
+        assert_eq!(ledger.matches("<row ").count(), 4);
+        assert!(ledger.contains("<v>-50000</v>"));
+        let pdf_path = temp.path().join("deposits.pdf");
+        export_pdf(&pdf_path, &report).unwrap();
+        let pdf = PdfDocument::parse(
+            &fs::read(&pdf_path).unwrap(),
+            &printpdf::PdfParseOptions::default(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let text = pdf
+            .extract_text()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for expected in [
+            "Awa Fall",
+            "250 000 FCFA",
+            "200 000 FCFA",
+            "Garde gratuite",
+            "Annulation",
+        ] {
+            assert!(text.contains(expected), "Missing {expected}: {text}");
+        }
+        assert!(!text.contains("Awa nouveau nom"));
+        // Optional local QA artifacts contain synthetic data only.
+        if let Ok(directory) = std::env::var("KER_FINANCE_TEST_EXPORT_DIR") {
+            let dir = Path::new(&directory);
+            fs::create_dir_all(dir).unwrap();
+            for path in [&csv_path, &xlsx_path, &pdf_path] {
+                fs::copy(path, dir.join(path.file_name().unwrap())).unwrap();
+            }
+        }
+    }
+
     fn empty_report() -> ReportData {
         ReportData {
+            custody: crate::models::CustodyReport {
+                balances: vec![],
+                movements: vec![],
+                opening_balance: 0,
+                closing_balance: 0,
+            },
             generated_at: "2026-08-26T12:00:00Z".into(),
             filters: ReportFilters {
                 from: None,

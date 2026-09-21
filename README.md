@@ -1,16 +1,16 @@
 # Kër Finance
 
-Application desktop locale de gestion d’un multiservices au Sénégal : inventaires Orange Money, Wave, Djamo et espèces, produits, stock, ventes, journal de boutique, dettes clients, rapports et sauvegardes chiffrées.
+Application desktop locale de gestion d’un multiservices au Sénégal : inventaires Orange Money, Wave, Djamo et espèces, produits, stock, ventes, journal de boutique, dettes et dépôts clients, rapports et sauvegardes chiffrées.
 
-## Installer la version 0.3.0
+## Installer la version 0.4.0
 
 Les installateurs sont disponibles dans les [releases GitHub](https://github.com/aloundoye/multiservices/releases). Les versions en brouillon restent accessibles aux mainteneurs jusqu’à leur publication.
 
 | Système | Fichier à télécharger |
 | --- | --- |
-| Mac Apple Silicon (puces M1, M2, etc.) | `Ker-Finance_0.3.0_macos-arm64.dmg` |
-| Mac Intel | `Ker-Finance_0.3.0_macos-x64.dmg` |
-| Windows 64 bits (x64) | `Ker-Finance_0.3.0_windows-x64-setup.exe` |
+| Mac Apple Silicon (puces M1, M2, etc.) | `Ker-Finance_0.4.0_macos-arm64.dmg` |
+| Mac Intel | `Ker-Finance_0.4.0_macos-x64.dmg` |
+| Windows 64 bits (x64) | `Ker-Finance_0.4.0_windows-x64-setup.exe` |
 
 Sur macOS, ouvrez le DMG et glissez **Kër Finance** dans **Applications**. Sur Windows, lancez l’EXE et suivez l’assistant d’installation. Node.js, Rust et les outils de compilation ne sont nécessaires que pour le développement.
 
@@ -20,19 +20,20 @@ Chaque release contient `SHA256SUMS.txt`. Pour vérifier un téléchargement, co
 
 ```bash
 # macOS : adapter le nom du fichier pour un Mac Intel.
-shasum -a 256 Ker-Finance_0.3.0_macos-arm64.dmg
+shasum -a 256 Ker-Finance_0.4.0_macos-arm64.dmg
 ```
 
 ```powershell
 # Windows PowerShell
-Get-FileHash .\Ker-Finance_0.3.0_windows-x64-setup.exe -Algorithm SHA256
+Get-FileHash .\Ker-Finance_0.4.0_windows-x64-setup.exe -Algorithm SHA256
 ```
 
 ## Fonctionnalités
 
 - capital initial réparti avec contrôle d’égalité exact ;
 - inventaires périodiques, comparaison par compte et justification des écarts ;
-- capital réel incluant les créances non soldées ;
+- capital réel net : liquidités + créances non soldées − dépôts à restituer ;
+- dépôts clients gratuits, restitutions partielles et reprise des montants déjà gardés ;
 - recettes, commissions, apports, achats, dépenses et retraits de capital ;
 - catalogue de produits, suivi du stock, ventes et réapprovisionnements reliés au capital attendu ;
 - plusieurs comptes/SIM Orange Money, Wave et Djamo, avec une caisse espèces unique ;
@@ -54,7 +55,41 @@ Le catalogue permet de saisir le prix de vente et le stock initial déjà déten
 
 Les ventes augmentent le **Capital attendu** du montant encaissé et les achats le diminuent. Les soldes vérifiés restent ceux du dernier inventaire financier. Le stock est suivi en unités entières et sa valeur n’est pas ajoutée au capital. L’historique conserve les noms et tarifs d’origine. Un produit à stock nul peut être archivé ; annuler une ancienne vente le réactive si des articles reviennent en stock.
 
-Les écritures automatiques figurent déjà dans les rapports et exports : ne les ressaisissez pas dans le journal. La migration vers le schéma 3 conserve les comptes et données précédentes ; les anciennes sauvegardes restent restaurables.
+Les écritures automatiques figurent déjà dans les rapports et exports : ne les ressaisissez pas dans le journal. Les migrations conservent les comptes et données précédentes ; les anciennes sauvegardes restent restaurables.
+
+## Dépôts clients
+
+L’espace **Dépôts clients** suit l’argent confié au gérant : fiche client (nom, téléphone facultatif, identifiant permanent), solde restant, entrées cumulées, restitutions et registre des mouvements. Les cumuls excluent les opérations annulées ; les reprises sont incluses dans les entrées.
+
+- **Recevoir un dépôt** augmente la somme due au client sans augmenter le capital attendu.
+- **Restituer** réduit le solde client. Le compte/SIM ou la caisse peut être différent du compte d’origine. Un retrait supérieur au solde client est refusé.
+- Un compte actif est obligatoire. La disponibilité réelle doit être vérifiée sur le compte choisi : les soldes de l’application sont les **montants vérifiés au dernier inventaire**, pas des soldes actualisés automatiquement.
+- Une annulation exige un motif et ajoute un contre-mouvement lié à l’original. Elle est refusée si elle a déjà eu lieu ou si elle rend le solde client négatif. L’annulation d’une restitution réactive automatiquement un client archivé si de l’argent lui est de nouveau dû.
+- L’archivage d’un client est possible uniquement à solde nul. Son identifiant et son historique sont conservés. Les noms, téléphones, comptes et identifiants enregistrés à l’époque ne sont pas réécrits lors d’un renommage.
+
+Le service est gratuit, sans intérêts. Cette version ne gère ni transferts entre clients, ni achats de produits réglés par dépôt, ni compensation avec les dettes clients. Le registre des dépôts est séparé du journal financier : **ne ressaisissez pas les dépôts et restitutions comme recettes ou dépenses**.
+
+### Reprendre l’argent déjà gardé en 0.3.0
+
+1. Créez les fiches des clients concernés.
+2. Choisissez **Reprendre les montants** dans Dépôts clients, puis indiquez le montant encore gardé pour chacun. Il n’est pas nécessaire de reconstruire les anciens encaissements.
+3. Vérifiez le total et le capital corrigé, puis **Valider la reprise**. Tous les montants sont enregistrés ensemble, sans nouvel encaissement ni dépense.
+
+Une reprise diminue le capital attendu une seule fois, car cet argent était jusque-là compté comme appartenant à la boutique. Une seule reprise non annulée est autorisée par client ; pour la corriger, annulez-la dans le registre et recommencez. Son annulation inverse le reclassement, même après une clôture, si le solde client est suffisant.
+
+Exemple : 1 000 000 FCFA de liquidités, dont 200 000 gardés pour des clients, deviennent **800 000 FCFA de capital attendu + 200 000 FCFA de dépôts**. Après un nouveau dépôt de 50 000 et une restitution de 80 000, les dépôts sont de **170 000**, les liquidités effectivement disponibles de **970 000**, et le capital reste **800 000**. Les soldes vérifiés affichés ne changent qu’au prochain inventaire.
+
+### Inventaires et rapports
+
+À l’inventaire, relevez les **soldes complets, argent des clients compris**. Le moteur calcule :
+
+**Capital réel net = liquidités constatées + créances − dépôts clients restants.**
+
+Le capital attendu part du capital net de la dernière clôture, ajoute les écritures financières suivantes et applique les reclassements non encore intégrés. Chaque clôture fige le total des dépôts, les soldes et libellés par client, ainsi que la séquence du registre. Une date antidatée ne fait jamais appliquer une reprise deux fois. Les anciens inventaires conservent leurs chiffres et affichent **« Dépôts clients non suivis à cette date »**.
+
+Les rapports PDF, Excel et CSV présentent, par client, le solde de départ, les augmentations et diminutions de la période, le solde de fin, le registre détaillé et les dépôts figés aux clôtures. La période utilise les **dates déclarées** ; les reprises et annulations sont incluses. Un mouvement antidaté peut donc changer un rapport de période, voire donner un solde de période négatif si sa date précède les entrées enregistrées. Les inventaires déjà clôturés restent immuables. Le registre conserve aussi la date réelle et l’ordre d’enregistrement, ainsi que l’auteur « Gérant ».
+
+Dans Excel, les feuilles **Dépôts clients**, **Registre dépôts** et **Dépôts aux clôtures** complètent les feuilles financières. En CSV, les lignes `depot_solde_periode`, `depot_mouvement`, `depot_total_cloture` et `depot_client_cloture` sont distinctes du `journal` ; ne les additionnez pas aux recettes ni entre niveaux de détail. Les colonnes supplémentaires contiennent les identifiants, séquences, dates d’enregistrement, liens d’annulation et reclassements de capital.
 
 ## Architecture
 
@@ -65,6 +100,8 @@ Les écritures automatiques figurent déjà dans les rapports et exports : ne le
 - `src-tauri/src/migration_v2.sql` : migration transactionnelle multi-comptes ;
 - `src-tauri/src/stock.rs` : catalogue, ventes, réapprovisionnements et mouvements de stock ;
 - `src-tauri/src/migration_v3.sql` : tables des produits et liens entre stock et journal ;
+- `src-tauri/src/custody.rs` : clients déposants, registre, reprises, annulations et rapprochement ;
+- `src-tauri/src/migration_v4.sql` : dépôts clients, idempotence et instantanés aux clôtures ;
 - `src-tauri/src/security.rs` : enveloppes de clés et chiffrement ;
 - `src-tauri/src/backup.rs` : sauvegarde, rétention, contrôle et restauration ;
 - `src-tauri/src/export.rs` : exports PDF, XLSX et CSV.
@@ -86,13 +123,13 @@ Ensuite, **Paramètres → Comptes et SIM** permet de créer, renommer, archiver
 
 ## Mise à niveau des données et sauvegardes
 
-La version 0.3.0 utilise le **schéma SQLite 3**. Les bases en version 1 ou 2 sont migrées au prochain déverrouillage. Conservez une sauvegarde chiffrée externe avant une mise à niveau.
+La version 0.4.0 utilise le **schéma SQLite 4** et s’installe par-dessus la 0.3.0. L’identifiant `sn.kerfinance.multiservices` et les chemins de stockage restent inchangés : comptes, produits, ventes, dettes, PIN et historique sont conservés. Gardez le mot de passe de récupération et une copie externe de vos sauvegardes.
 
-Depuis le schéma 1, l’application crée et vérifie d’abord une sauvegarde chiffrée `avant-migration-v1-….msbackup`. Si cette étape échoue, les données restent en version 1. La migration ajoute les comptes Orange Money — Principal, Wave — Principal, Djamo — Principal et Espèces. Les anciens soldes sont marqués « historique regroupé par service » : aucune répartition ancienne entre SIM n’est inventée.
+Avant de migrer une base existante aux schémas 1, 2 ou 3, l’application crée **et vérifie** une sauvegarde chiffrée `avant-migration-vN-….msbackup`. Si cette étape échoue, elle ne modifie pas la base. Les migrations manquantes sont exécutées conditionnellement, dans une transaction auditée ; les tables du schéma 3 ne sont pas recréées. Au schéma 1, les anciens soldes restent marqués « historique regroupé par service », sans inventer de répartition entre SIM.
 
-Le passage au schéma 3 ajoute les produits, ventes, réapprovisionnements et mouvements de stock. Les montants, dates, références, corrections, écarts et comptes existants sont conservés. La migration est atomique, auditée et ne s’exécute qu’une fois.
+Le schéma 4 ajoute les dépôts, les identifiants de requête et les instantanés d’inventaire. Les anciennes clôtures gardent leurs montants sans dépôts historiques inventés. Les opérations de dépôt, le solde client, l’audit et le résultat associé à une requête sont enregistrés dans la même transaction : une requête identique rejouée ne crée aucun doublon, et le même identifiant avec d’autres données est refusé.
 
-Les sauvegardes au schéma 3 contiennent les comptes, leurs relevés et libellés historiques, ainsi que les produits et opérations de stock. Une sauvegarde au schéma 1 ou 2 est déchiffrée, contrôlée puis migrée dans une copie temporaire avant de remplacer les données actives. Un mot de passe incorrect ou une migration invalide interrompt la restauration. Ne rouvrez pas une base au schéma 3 avec une ancienne version de l’application.
+Les sauvegardes des **schémas 1 à 4** sont restaurables. La restauration contrôle et migre une copie temporaire avant de remplacer les données actives. Les sauvegardes 4 incluent les dépôts, les reprises, les annulations, les instantanés et les informations d’idempotence. Un mot de passe incorrect, une archive endommagée ou une migration invalide interrompt la restauration. Une base migrée au schéma 4 ne doit pas être ouverte avec la version 0.3.0.
 
 ## Développement
 
@@ -129,7 +166,7 @@ La commande construit d’abord le `.app` avec Tauri, puis crée le DMG avec l�
 Les fichiers sont générés dans :
 
 - `src-tauri/target/release/bundle/macos/Kër Finance.app`
-- `src-tauri/target/release/bundle/dmg/Kër Finance_0.3.0_<architecture>.dmg`
+- `src-tauri/target/release/bundle/dmg/Kër Finance_0.4.0_<architecture>.dmg`
 
 Le DMG est généré pour l’architecture du Mac qui exécute la commande (`arm64` ou `x86_64`). Pour reproduire la signature ad hoc utilisée en CI, exécutez `APPLE_SIGNING_IDENTITY=- npm run tauri:build:mac`. Une distribution notarisée nécessite une signature Developer ID et une notarisation Apple.
 
@@ -160,15 +197,15 @@ Pour une prochaine version :
 
 1. Mettez à jour `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` et l’entrée du projet dans `src-tauri/Cargo.lock`.
 2. Exécutez les vérifications, puis enregistrez et poussez les changements, y compris le workflow de release.
-3. Créez et poussez le tag correspondant à la nouvelle version. Par exemple, après passage à **0.3.1** :
+3. Créez et poussez le tag correspondant à la nouvelle version. Par exemple, après passage à **0.4.0** :
 
 ```bash
-npm run release:check -- v0.3.1
-git tag -a v0.3.1 -m "Kër Finance 0.3.1"
-git push origin v0.3.1
+npm run release:check -- v0.4.0
+git tag -a v0.4.0 -m "Kër Finance 0.4.0"
+git push origin v0.4.0
 ```
 
-Le tag `v0.3.0` existe déjà : ne le recréez pas et ne le déplacez pas. Une fois le workflow présent sur la branche principale, **Actions → Release installers → Run workflow** permet de relancer un tag existant. Sélectionnez la branche contenant le workflow à jour et indiquez le tag à reconstruire. Le code de l’application est toujours extrait du commit de ce tag. Une relance réutilise le brouillon existant et remplace ses fichiers ; elle refuse de modifier une release déjà publiée.
+La 0.4.0 utilise un nouveau tag `v0.4.0` et une nouvelle release. Le tag et la release `v0.3.0` restent inchangés. Ne recréez pas et ne déplacez pas un tag existant. Une fois le workflow présent sur la branche principale, **Actions → Release installers → Run workflow** permet de relancer un tag existant. Sélectionnez la branche contenant le workflow à jour et indiquez le tag à reconstruire. Le code de l’application est toujours extrait du commit de ce tag. Une relance réutilise le brouillon existant et remplace ses fichiers ; elle refuse de modifier une release déjà publiée.
 
 Vérifiez les installateurs sur les systèmes cibles avant de publier le brouillon. Les DMG de ce workflow sont signés ad hoc, sans notarisation Apple ; l’EXE Windows n’est pas signé par un certificat éditeur. La [documentation Tauri sur les releases GitHub](https://v2.tauri.app/distribute/pipelines/github/) décrit la configuration des certificats pour une distribution signée.
 
@@ -189,4 +226,5 @@ Le mot de passe de récupération doit être conservé hors du PC. Il est indisp
 - pas de synchronisation cloud ;
 - pas de connexion aux API Orange Money, Wave ou Djamo ;
 - ventes de produits payées intégralement, sans crédit ni retour partiel ;
+- dépôts gratuits sans transferts entre clients, intérêts ou compensation avec les dettes ;
 - les soldes affichés sont ceux du dernier inventaire validé.
