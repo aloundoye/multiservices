@@ -273,3 +273,29 @@ p { color: var(--muted); line-height: 1.55; }
 .products-page td { max-width: 280px; overflow-wrap: anywhere; }
 @media (max-width: 1000px) { .products-page .page-header { flex-direction: column; } .product-actions { justify-content: flex-start; } }
 @media (max-width: 650px) { .sale-line { grid-template-columns: 1fr 1fr 28px; } .sale-line > .field:first-child { grid-column: 1 / -1; } .products-page .summary-strip { grid-template-columns: 1fr; } }
+
+/* Client funds are visually grouped separately from the shop's own capital. */
+.custody-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.custody-dashboard { display: flex; align-items: center; gap: 18px; padding: 24px; margin-bottom: 24px; }
+.custody-dashboard > div:nth-child(2) { display: flex; flex: 1; flex-direction: column; gap: 5px; }
+.custody-dashboard strong { font-size: 26px; }
+.custody-dashboard small { color: var(--text-muted, #697870); }
+.custody-opening-banner { display: flex; align-items: center; gap: 18px; padding: 20px 24px; margin: 22px 0; background: #f0f5f2; border: 1px solid #dce8df; border-radius: 12px; }
+.custody-opening-banner > svg { flex-shrink: 0; color: #23624c; }
+.custody-opening-banner > div { flex: 1; }
+.custody-opening-banner p, .custody-table-note { color: #65746b; font-size: 13px; line-height: 1.6; }
+.custody-opening-banner p { margin: 5px 0 0; }
+.custody-id { max-width: 195px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; }
+.custody-table-note { padding: 16px 24px; margin: 0; }
+.custody-opening-line { display: grid; grid-template-columns: 1fr 1fr auto; align-items: end; gap: 12px; }
+.custody-opening-line > button { margin-bottom: 8px; }
+.custody-preview, .custody-inventory-snapshot { padding: 20px; background: #f4f8f5; border-radius: 10px; }
+.custody-report { margin-top: 24px; }
+.custody-report .summary-strip { border: 0; box-shadow: none; }
+@media (max-width: 1050px) {
+  .custody-dashboard, .custody-opening-banner { flex-wrap: wrap; }
+  .custody-dashboard .custody-actions { flex-basis: 100%; }
+  .custody-opening-line { grid-template-columns: 1fr 1fr auto; }
+}
+.custody-dashboard .metric-icon { position: static; flex-shrink: 0; }
+.custody-report > .panel-header { padding: 20px 24px 0; }

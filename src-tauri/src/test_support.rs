@@ -19,7 +19,7 @@ pub fn legacy_database(connection: &Connection) {
 pub fn historical_data(connection: &Connection) -> Vec<Vec<rusqlite::types::Value>> {
     let queries = [
         "SELECT * FROM business_settings",
-        "SELECT * FROM inventories ORDER BY id",
+        "SELECT id,kind,closed_at,orange_money,wave,djamo,cash,receivables,liquidity,expected_total,actual_total,variance,variance_category,variance_note FROM inventories ORDER BY id",
         "SELECT id,entry_type,amount,signed_amount,payment_account,occurred_at,posted_at,reference,note,reverses_id FROM journal_entries ORDER BY id",
         "SELECT id,customer_name,phone,provider,principal,remaining,issued_at,due_date,note,status,cancellation_reason,created_at FROM debts ORDER BY id",
         "SELECT id,debt_id,amount,account,paid_at,note,created_at FROM debt_payments ORDER BY id",

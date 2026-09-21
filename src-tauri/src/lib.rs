@@ -1,6 +1,7 @@
 mod accounts;
 mod backup;
 mod commands;
+mod custody;
 mod db;
 mod domain;
 mod error;
@@ -27,6 +28,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::check_setup,
+            commands::list_custody_customers,
+            commands::list_custody_movements,
+            commands::save_custody_customer,
+            commands::record_custody_movement,
+            commands::reverse_custody_movement,
+            commands::preview_custody_opening,
+            commands::record_custody_opening,
             commands::list_products,
             commands::create_product,
             commands::update_product,

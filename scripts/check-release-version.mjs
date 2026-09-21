@@ -14,7 +14,7 @@ const versions = {
   'Cargo.lock': cargoLock.match(/\[\[package\]\]\nname = "multiservices-senegal"\nversion = "([^"]+)"/)?.[1],
 };
 if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(pkg.version)) {
-  throw new Error('Use a stable release version such as 0.3.0.');
+  throw new Error('Use a stable release version such as 0.4.0.');
 }
 for (const [file, version] of Object.entries(versions)) {
   if (version !== pkg.version) throw new Error(`${file}: ${version} does not match ${pkg.version}.`);

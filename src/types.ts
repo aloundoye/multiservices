@@ -30,6 +30,9 @@ export interface AccountBalances {
 }
 
 export interface Inventory {
+  custodyTotal: Money | null;
+  custodySequence: number;
+  custodyBalances: CustodyBalanceSnapshot[];
   accountBalances: AccountBalanceSnapshot[];
   id: string;
   kind: "opening" | "regular";
@@ -46,6 +49,7 @@ export interface Inventory {
 }
 
 export interface InventoryPreview {
+  custodyTotal: Money;
   accountBalances: AccountBalanceSnapshot[];
   balances: AccountBalances;
   previousBalances: AccountBalances;
@@ -107,6 +111,8 @@ export interface Debt {
 }
 
 export interface Dashboard {
+  custodyTotal: Money;
+  custodyCustomersCount: number;
   accounts: Account[];
   settings: BusinessSettings;
   lastInventory: Inventory;
@@ -126,6 +132,7 @@ export interface ReportFilters {
 }
 
 export interface ReportData {
+  custody: CustodyReport;
   generatedAt: string;
   filters: ReportFilters;
   inventories: Inventory[];
@@ -157,6 +164,7 @@ export type PageId =
   | "inventory"
   | "history"
   | "products"
+  | "custody"
   | "journal"
   | "debts"
   | "reports"
@@ -220,3 +228,19 @@ export interface SaleLineInput { productId: string; quantity: number; unitPrice:
 export interface CreateSaleInput { requestId: string; lines: SaleLineInput[]; accountId: string; occurredAt: string; note?: string | null }
 export interface ReceiveStockInput { requestId: string; productId: string; quantity: number; amount: Money; accountId: string; occurredAt: string; note?: string | null }
 export interface CancelProductOperationInput { requestId: string; operationId: string; reason: string }
+
+export interface CustodyCustomer { id: string; name: string; phone: string | null; active: boolean; balance: Money; totalReceived: Money; totalWithdrawn: Money }
+export interface SaveCustodyCustomerInput { requestId: string; customerId: string | null; name: string; phone: string | null; active: boolean }
+export type CustodyKind = "deposit" | "withdrawal" | "opening" | "reversal";
+export interface CustodyMovement {
+  sequence: number; id: string; customerId: string; customerName: string; customerPhone: string | null;
+  kind: CustodyKind; delta: Money; capitalAdjustment: Money; balanceAfter: Money; accountSnapshot: AccountSnapshot | null;
+  occurredAt: string; postedAt: string; operator: string; note: string | null; reversesId: string | null; reversed: boolean;
+}
+export interface CreateCustodyMovementInput { requestId: string; customerId: string; kind: "deposit" | "withdrawal"; amount: Money; accountId: string; occurredAt: string; note: string | null }
+export interface ReverseCustodyMovementInput { requestId: string; movementId: string; reason: string }
+export interface CustodyOpeningInput { requestId: string; lines: { customerId: string; amount: Money }[] }
+export interface CustodyOpeningPreview { total: Money; expectedCapital: Money; correctedCapital: Money }
+export interface CustodyBalanceSnapshot { customerId: string; customerName: string; customerPhone: string | null; balance: Money }
+export interface CustodyPeriodBalance { customerId: string; customerName: string; openingBalance: Money; increases: Money; decreases: Money; closingBalance: Money }
+export interface CustodyReport { balances: CustodyPeriodBalance[]; movements: CustodyMovement[]; openingBalance: Money; closingBalance: Money }

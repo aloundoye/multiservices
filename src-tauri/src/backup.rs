@@ -313,6 +313,162 @@ mod tests {
     use super::*;
     use crate::{accounts, db::test_support::*, models::*};
 
+    #[test]
+    fn used_v3_upgrade_has_verified_backup_and_v4_custody_roundtrip() {
+        use crate::{custody, stock};
+        const PASSWORD: &str = "une phrase de récupération solide";
+        let source_dir = TempDir::new().unwrap();
+        let source = AppState::new(source_dir.path().to_path_buf()).unwrap();
+        let key = vec![53u8; 32];
+        let mut connection = db::open_database(&source.paths.database, &key).unwrap();
+        legacy_database(&connection);
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .unwrap();
+        connection
+            .execute_batch(include_str!("migration_v2.sql"))
+            .unwrap();
+        connection
+            .execute_batch(include_str!("migration_v3.sql"))
+            .unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        let product = stock::create_product(
+            &mut connection,
+            CreateProductInput {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                name: "Câble".into(),
+                price: 2000,
+                initial_stock: 10,
+            },
+        )
+        .unwrap();
+        // Model a sale already made in 0.3.0 without using the new accounting engine.
+        connection.execute_batch("INSERT INTO journal_entries(id,entry_type,amount,signed_amount,payment_account,occurred_at,posted_at,account_id,account_name) VALUES ('v3-sale','sale',4000,4000,'cash','2026-09-07','2026-09-07T12:00:00Z','legacy-cash','Espèces'); INSERT INTO product_operations VALUES('v3-op','sale','v3-sale',NULL,NULL);").unwrap();
+        connection
+            .execute(
+                "INSERT INTO product_operation_lines VALUES ('v3-op',?1,'Câble',2,2000,4000)",
+                [&product.id],
+            )
+            .unwrap();
+        connection
+            .execute("UPDATE products SET stock=8 WHERE id=?1", [&product.id])
+            .unwrap();
+        connection.execute("INSERT INTO stock_movements VALUES ('v3-move',?1,'Câble','v3-op','sale',-2,8,NULL,'2026-09-07','2026-09-07T12:00:00Z')",[&product.id]).unwrap();
+        let historical = historical_data(&connection);
+        assert!(source.set_recovered_session(key.clone().into()).is_err());
+        assert_eq!(db::schema_version(&connection).unwrap(), 3);
+        assert_eq!(historical_data(&connection), historical);
+        let envelope = security::test_envelope(&key, "123456", PASSWORD).unwrap();
+        security::write_envelope(&source.paths.security, &envelope).unwrap();
+        let security_before = fs::read(&source.paths.security).unwrap();
+        source.set_recovered_session(key.clone().into()).unwrap();
+        assert_eq!(fs::read(&source.paths.security).unwrap(), security_before);
+        assert_eq!(db::schema_version(&connection).unwrap(), 4);
+        assert_eq!(historical_data(&connection), historical);
+        assert_eq!(stock::products(&connection).unwrap()[0].stock, 8);
+        assert_eq!(stock::operations(&connection).unwrap()[0].amount, 4000);
+        let backup = list_backups(&source).unwrap();
+        assert_eq!(backup.len(), 1);
+        let extracted = extract_and_validate(Path::new(&backup[0].path)).unwrap();
+        assert_eq!(extracted.manifest.schema_version, 3);
+        let original = db::open_database(&extracted.database, &key).unwrap();
+        assert_eq!(historical_data(&original), historical);
+        assert_eq!(stock::products(&original).unwrap()[0].stock, 8);
+        // A schema-3 archive can also be restored independently.
+        let legacy_dir = TempDir::new().unwrap();
+        let legacy = AppState::new(legacy_dir.path().to_path_buf()).unwrap();
+        restore_backup_with(
+            &legacy,
+            RestoreInput {
+                backup_path: backup[0].path.clone(),
+                recovery_password: PASSWORD.into(),
+                new_pin: "654321".into(),
+            },
+            security::test_envelope,
+        )
+        .unwrap();
+        legacy
+            .with_connection(|db| {
+                assert_eq!(historical_data(db), historical);
+                assert_eq!(stock::products(db)?[0].stock, 8);
+                Ok(())
+            })
+            .unwrap();
+        let retry = source
+            .with_connection(|db| {
+                let c = custody::save_customer(
+                    db,
+                    SaveCustodyCustomerInput {
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        customer_id: None,
+                        name: "Awa".into(),
+                        phone: None,
+                        active: true,
+                    },
+                )?;
+                custody::opening(
+                    db,
+                    CustodyOpeningInput {
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        lines: vec![CustodyOpeningLine {
+                            customer_id: c.id.clone(),
+                            amount: 200_000,
+                        }],
+                    },
+                )?;
+                let input = CreateCustodyMovementInput {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    customer_id: c.id,
+                    kind: "deposit".into(),
+                    amount: 50_000,
+                    account_id: "legacy-wave".into(),
+                    occurred_at: "2026-09-21".into(),
+                    note: None,
+                };
+                custody::record(db, input.clone())?;
+                let values = balances(db);
+                close(db, values);
+                Ok(input)
+            })
+            .unwrap();
+        let full_snapshot = |db: &Connection| -> AppResult<serde_json::Value> {
+            Ok(
+                serde_json::json!({"finance":snapshot(db),"clients":custody::customers(db)?,"movements":custody::movements(db)?,"products":stock::products(db)?,"sales":stock::operations(db)?}),
+            )
+        };
+        let expected = source.with_connection(|db| full_snapshot(db)).unwrap();
+        let archive = create_backup(&source, None).unwrap();
+        assert_eq!(
+            extract_and_validate(Path::new(&archive.path))
+                .unwrap()
+                .manifest
+                .schema_version,
+            4
+        );
+        let target_dir = TempDir::new().unwrap();
+        let target = AppState::new(target_dir.path().to_path_buf()).unwrap();
+        restore_backup_with(
+            &target,
+            RestoreInput {
+                backup_path: archive.path,
+                recovery_password: PASSWORD.into(),
+                new_pin: "654321".into(),
+            },
+            security::test_envelope,
+        )
+        .unwrap();
+        target
+            .with_connection(|db| {
+                assert_eq!(full_snapshot(db)?, expected);
+                custody::record(db, retry)?;
+                assert_eq!(full_snapshot(db)?, expected);
+                db::integrity_check(db)
+            })
+            .unwrap();
+    }
+
     fn snapshot(connection: &Connection) -> serde_json::Value {
         serde_json::json!({
             "accounts": accounts::list(connection).unwrap(),
@@ -474,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn restores_v2_then_roundtrips_stock_and_idempotency_in_encrypted_v3_backup() {
+    fn restores_v2_then_roundtrips_stock_and_idempotency_in_current_backup() {
         use crate::stock;
         const PASSWORD: &str = "une phrase de récupération solide";
         let source_dir = TempDir::new().unwrap();
@@ -585,7 +741,7 @@ mod tests {
                 .unwrap()
                 .manifest
                 .schema_version,
-            3
+            db::SCHEMA_VERSION
         );
         let target_dir = TempDir::new().unwrap();
         let target = AppState::new(target_dir.path().to_path_buf()).unwrap();

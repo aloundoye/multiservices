@@ -6,7 +6,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    accounts,
+    accounts, custody,
     domain::{
         clean_optional, clean_required, signed_journal_amount, validate_balances,
         validate_debt_provider, validate_variance_explanation,
@@ -15,7 +15,7 @@ use crate::{
     models::*,
 };
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 pub fn open_database(path: &Path, database_key: &[u8]) -> AppResult<Connection> {
     let connection = Connection::open(path)?;
@@ -69,7 +69,12 @@ pub fn migrate(connection: &Connection) -> AppResult<()> {
                 ));
             }
         }
-        tx.execute_batch(include_str!("migration_v3.sql"))?;
+        if version < 3 {
+            tx.execute_batch(include_str!("migration_v3.sql"))?;
+        }
+        if version < 4 {
+            tx.execute_batch(include_str!("migration_v4.sql"))?;
+        }
         let broken = tx.prepare("PRAGMA foreign_key_check")?.exists([])?;
         if broken {
             return Err(AppError::Validation(
@@ -181,11 +186,11 @@ fn migrate_v1(connection: &Connection) -> AppResult<()> {
     Ok(())
 }
 
-fn now() -> String {
+pub(crate) fn now() -> String {
     Utc::now().to_rfc3339()
 }
 
-fn validate_date(value: &str, label: &str) -> AppResult<String> {
+pub(crate) fn validate_date(value: &str, label: &str) -> AppResult<String> {
     NaiveDate::parse_from_str(value, "%Y-%m-%d")
         .map_err(|_| AppError::Validation(format!("{label} doit être une date valide.")))?;
     Ok(value.to_string())
@@ -229,8 +234,8 @@ pub fn initialize_business(connection: &mut Connection, input: &SetupInput) -> A
     tx.execute(
         "INSERT INTO inventories
          (id, kind, closed_at, orange_money, wave, djamo, cash, receivables, liquidity,
-          expected_total, actual_total, variance, variance_category, variance_note)
-         VALUES (?1, 'opening', ?2, ?3, ?4, ?5, ?6, 0, ?7, ?7, ?7, 0, NULL, NULL)",
+          expected_total, actual_total, variance, variance_category, variance_note, custody_total, custody_sequence)
+         VALUES (?1, 'opening', ?2, ?3, ?4, ?5, ?6, 0, ?7, ?7, ?7, 0, NULL, NULL, 0, 0)",
         params![
             inventory_id,
             timestamp,
@@ -261,6 +266,7 @@ pub fn initialize_business(connection: &mut Connection, input: &SetupInput) -> A
         });
     }
     accounts::save_balances(&tx, &inventory_id, &details)?;
+    custody::freeze(&tx, &inventory_id)?;
     audit_tx(
         &tx,
         "business_initialized",
@@ -341,6 +347,8 @@ pub fn update_settings(
 
 #[derive(Clone)]
 struct InventoryRow {
+    custody_total: Option<Money>,
+    custody_sequence: i64,
     id: String,
     kind: String,
     closed_at: String,
@@ -356,6 +364,8 @@ struct InventoryRow {
 
 fn map_inventory_row(row: &Row<'_>) -> rusqlite::Result<InventoryRow> {
     Ok(InventoryRow {
+        custody_total: row.get(14)?,
+        custody_sequence: row.get(15)?,
         id: row.get(0)?,
         kind: row.get(1)?,
         closed_at: row.get(2)?,
@@ -378,7 +388,7 @@ fn map_inventory_row(row: &Row<'_>) -> rusqlite::Result<InventoryRow> {
 fn load_inventory_rows(connection: &Connection) -> AppResult<Vec<InventoryRow>> {
     let mut statement = connection.prepare(
         "SELECT id, kind, closed_at, orange_money, wave, djamo, cash, receivables,
-                liquidity, expected_total, actual_total, variance, variance_category, variance_note
+                liquidity, expected_total, actual_total, variance, variance_category, variance_note, custody_total, custody_sequence
          FROM inventories ORDER BY closed_at ASC, rowid ASC",
     )?;
     let rows = statement
@@ -392,6 +402,9 @@ fn to_inventory(row: &InventoryRow, previous: Option<&InventoryRow>) -> Inventor
         .map(|v| v.balances.clone())
         .unwrap_or_else(|| row.balances.clone());
     Inventory {
+        custody_total: row.custody_total,
+        custody_sequence: row.custody_sequence,
+        custody_balances: Vec::new(),
         account_balances: Vec::new(),
         id: row.id.clone(),
         kind: row.kind.clone(),
@@ -432,6 +445,7 @@ pub fn list_inventories(
         .collect();
     for item in &mut items {
         item.account_balances = accounts::inventory_balances(connection, &item.id)?;
+        item.custody_balances = custody::inventory_balances(connection, &item.id)?;
     }
     items.reverse();
     Ok(items)
@@ -441,7 +455,7 @@ fn last_inventory_row(connection: &Connection) -> AppResult<InventoryRow> {
     connection
         .query_row(
             "SELECT id, kind, closed_at, orange_money, wave, djamo, cash, receivables,
-                    liquidity, expected_total, actual_total, variance, variance_category, variance_note
+                    liquidity, expected_total, actual_total, variance, variance_category, variance_note, custody_total, custody_sequence
              FROM inventories ORDER BY closed_at DESC, rowid DESC LIMIT 1",
             [],
             map_inventory_row,
@@ -455,6 +469,7 @@ pub fn last_inventory(connection: &Connection) -> AppResult<Inventory> {
     let previous = all.len().checked_sub(2).map(|index| &all[index]);
     let mut item = to_inventory(last, previous);
     item.account_balances = accounts::inventory_balances(connection, &item.id)?;
+    item.custody_balances = custody::inventory_balances(connection, &item.id)?;
     Ok(item)
 }
 
@@ -486,16 +501,17 @@ pub fn preview_inventory(
     let liquidity = validate_balances(&balances)?;
     let previous = last_inventory_row(connection)?;
     let receivables = open_receivables(connection)?;
-    let expected_total = previous
-        .actual_total
-        .checked_add(journal_net_after(connection, &previous.closed_at)?)
-        .ok_or_else(|| {
-            AppError::Validation("Le capital attendu dépasse la limite autorisée.".into())
-        })?;
-    let actual_total = liquidity.checked_add(receivables).ok_or_else(|| {
-        AppError::Validation("Le capital réel dépasse la limite autorisée.".into())
-    })?;
+    let expected_total = custody::add(
+        custody::add(
+            previous.actual_total,
+            journal_net_after(connection, &previous.closed_at)?,
+        )?,
+        custody::capital_after(connection, previous.custody_sequence)?,
+    )?;
+    let custody_total = custody::total(connection)?;
+    let actual_total = custody::add(custody::add(liquidity, receivables)?, -custody_total)?;
     Ok(InventoryPreview {
+        custody_total,
         account_balances,
         balances: balances.clone(),
         previous_balances: previous.balances.clone(),
@@ -509,7 +525,7 @@ pub fn preview_inventory(
         liquidity,
         expected_total,
         actual_total,
-        variance: actual_total - expected_total,
+        variance: custody::add(actual_total, -expected_total)?,
     })
 }
 
@@ -544,8 +560,8 @@ pub fn close_inventory(
     tx.execute(
         "INSERT INTO inventories
          (id, kind, closed_at, orange_money, wave, djamo, cash, receivables, liquidity,
-          expected_total, actual_total, variance, variance_category, variance_note)
-         VALUES (?1, 'regular', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+          expected_total, actual_total, variance, variance_category, variance_note, custody_total, custody_sequence)
+         VALUES (?1, 'regular', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             id,
             timestamp,
@@ -559,10 +575,13 @@ pub fn close_inventory(
             preview.actual_total,
             preview.variance,
             category,
-            note
+            note,
+            preview.custody_total,
+            custody::sequence(&tx)?
         ],
     )?;
     accounts::save_balances(&tx, &id, &preview.account_balances)?;
+    custody::freeze(&tx, &id)?;
     audit_tx(
         &tx,
         "inventory_closed",
@@ -573,6 +592,8 @@ pub fn close_inventory(
             "actualTotal": preview.actual_total,
             "variance": preview.variance,
             "receivables": preview.receivables,
+            "custodyTotal": preview.custody_total,
+            "custodySequence": custody::sequence(&tx)?,
             "category": category
         }),
     )?;
@@ -1133,12 +1154,10 @@ pub fn get_dashboard(connection: &Connection) -> AppResult<Dashboard> {
     let settings = get_settings(connection)?;
     let last_inventory = last_inventory(connection)?;
     let journal_net = journal_net_after(connection, &last_inventory.closed_at)?;
-    let expected_capital = last_inventory
-        .actual_total
-        .checked_add(journal_net)
-        .ok_or_else(|| {
-            AppError::Validation("Le capital attendu dépasse la limite autorisée.".into())
-        })?;
+    let expected_capital = custody::add(
+        custody::add(last_inventory.actual_total, journal_net)?,
+        custody::capital_after(connection, last_inventory.custody_sequence)?,
+    )?;
     let open_receivables = open_receivables(connection)?;
     let debts = list_debts(connection, None)?;
     let open_debts_count = debts
@@ -1151,6 +1170,8 @@ pub fn get_dashboard(connection: &Connection) -> AppResult<Dashboard> {
         .with_timezone(&Utc);
     let next = closed_at + Duration::minutes(settings.inventory_interval_minutes);
     Ok(Dashboard {
+        custody_total: custody::total(connection)?,
+        custody_customers_count: custody::count(connection)?,
         accounts: accounts::list(connection)?,
         settings,
         expected_capital,
@@ -1188,9 +1209,13 @@ pub fn list_audit_events(connection: &Connection, limit: i64) -> AppResult<Vec<A
 }
 
 pub fn get_report(connection: &Connection, filters: ReportFilters) -> AppResult<ReportData> {
-    if let (Some(from), Some(to)) = (&filters.from, &filters.to) {
+    if let Some(from) = &filters.from {
         validate_date(from, "La date de début")?;
+    }
+    if let Some(to) = &filters.to {
         validate_date(to, "La date de fin")?;
+    }
+    if let (Some(from), Some(to)) = (&filters.from, &filters.to) {
         if from > to {
             return Err(AppError::Validation(
                 "La date de début doit précéder la date de fin.".into(),
@@ -1213,6 +1238,7 @@ pub fn get_report(connection: &Connection, filters: ReportFilters) -> AppResult<
     let total_variance = inventories.iter().map(|item| item.variance).sum();
     let outstanding_receivables = open_receivables(connection)?;
     Ok(ReportData {
+        custody: custody::report(connection, &filters)?,
         generated_at: now(),
         filters,
         inventories,

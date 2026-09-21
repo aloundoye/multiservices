@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  CustodyCustomer, CustodyMovement, SaveCustodyCustomerInput, CreateCustodyMovementInput, ReverseCustodyMovementInput, CustodyOpeningInput, CustodyOpeningPreview,
   Product, ProductOperation, StockMovement, CreateProductInput, UpdateProductInput, ArchiveProductInput,
   AdjustStockInput, CreateSaleInput, ReceiveStockInput, CancelProductOperationInput,
   Account, AccountBalanceInput, OpeningAccount, OpeningPreview, CreateAccountInput, UpdateAccountInput,
@@ -39,6 +40,13 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 }
 
 export const api = {
+  custodyCustomers: () => call<CustodyCustomer[]>("list_custody_customers"),
+  custodyMovements: () => call<CustodyMovement[]>("list_custody_movements"),
+  saveCustodyCustomer: (input: SaveCustodyCustomerInput) => call<CustodyCustomer>("save_custody_customer", { input }),
+  recordCustodyMovement: (input: CreateCustodyMovementInput) => call<CustodyMovement>("record_custody_movement", { input }),
+  reverseCustodyMovement: (input: ReverseCustodyMovementInput) => call<CustodyMovement>("reverse_custody_movement", { input }),
+  previewCustodyOpening: (input: CustodyOpeningInput) => call<CustodyOpeningPreview>("preview_custody_opening", { input }),
+  recordCustodyOpening: (input: CustodyOpeningInput) => call<CustodyMovement[]>("record_custody_opening", { input }),
   products: () => call<Product[]>("list_products"),
   createProduct: (input: CreateProductInput) => call<Product>("create_product", { input }),
   updateProduct: (input: UpdateProductInput) => call<Product>("update_product", { input }),

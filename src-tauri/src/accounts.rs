@@ -146,7 +146,8 @@ pub fn set_active(connection: &mut Connection, id: &str, active: bool) -> AppRes
         let pending: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM journal_entries WHERE account_id=?1 AND posted_at>=?2
              UNION ALL SELECT 1 FROM debts WHERE account_id=?1 AND created_at>=?2
-             UNION ALL SELECT 1 FROM debt_payments WHERE account_id=?1 AND created_at>=?2)",
+             UNION ALL SELECT 1 FROM debt_payments WHERE account_id=?1 AND created_at>=?2
+             UNION ALL SELECT 1 FROM custody_movements WHERE account_id=?1 AND posted_at>=?2)",
             params![id, since],
             |r| r.get(0),
         )?;
