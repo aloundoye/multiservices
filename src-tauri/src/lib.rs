@@ -3,6 +3,7 @@ mod backup;
 mod commands;
 mod custody;
 mod db;
+mod debt_clients;
 mod domain;
 mod error;
 mod export;
@@ -64,7 +65,11 @@ pub fn run() {
             commands::reverse_journal_entry,
             commands::list_debts,
             commands::create_debt,
-            commands::record_debt_payment,
+            commands::list_debt_customers,
+            commands::save_debt_customer,
+            commands::preview_customer_repayment,
+            commands::record_customer_repayment,
+            commands::list_customer_repayments,
             commands::cancel_debt,
             commands::get_report,
             commands::export_report,

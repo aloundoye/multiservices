@@ -131,19 +131,53 @@ pub fn list_debts(state: State<'_, AppState>) -> CommandResult<Vec<Debt>> {
 }
 
 #[tauri::command]
-pub fn create_debt(input: CreateDebtInput, state: State<'_, AppState>) -> CommandResult<Debt> {
-    state
-        .with_connection(|connection| db::create_debt(connection, input))
-        .map_err(command_error)
-}
-
-#[tauri::command]
-pub fn record_debt_payment(
-    input: RecordPaymentInput,
+pub fn create_debt(
+    input: CreateClientDebtInput,
     state: State<'_, AppState>,
 ) -> CommandResult<Debt> {
     state
-        .with_connection(|connection| db::record_debt_payment(connection, input))
+        .with_connection(|c| crate::debt_clients::create_debt(c, input))
+        .map_err(command_error)
+}
+#[tauri::command]
+pub fn list_debt_customers(state: State<'_, AppState>) -> CommandResult<Vec<DebtCustomer>> {
+    state
+        .with_connection(|c| crate::debt_clients::customers(c))
+        .map_err(command_error)
+}
+#[tauri::command]
+pub fn save_debt_customer(
+    input: SaveDebtCustomerInput,
+    state: State<'_, AppState>,
+) -> CommandResult<DebtCustomer> {
+    state
+        .with_connection(|c| crate::debt_clients::save_customer(c, input))
+        .map_err(command_error)
+}
+#[tauri::command]
+pub fn preview_customer_repayment(
+    input: RepaymentPreviewInput,
+    state: State<'_, AppState>,
+) -> CommandResult<RepaymentPreview> {
+    state
+        .with_connection(|c| crate::debt_clients::preview(c, &input))
+        .map_err(command_error)
+}
+#[tauri::command]
+pub fn record_customer_repayment(
+    input: RecordCustomerRepaymentInput,
+    state: State<'_, AppState>,
+) -> CommandResult<CustomerRepayment> {
+    state
+        .with_connection(|c| crate::debt_clients::record_repayment(c, input))
+        .map_err(command_error)
+}
+#[tauri::command]
+pub fn list_customer_repayments(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<CustomerRepayment>> {
+    state
+        .with_connection(|c| crate::debt_clients::repayments(c, None))
         .map_err(command_error)
 }
 

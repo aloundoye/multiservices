@@ -57,7 +57,7 @@ fn custody_label(kind: &str) -> &str {
 }
 fn csv_row<const N: usize>(writer: &mut csv::Writer<fs::File>, values: [&str; N]) -> AppResult<()> {
     let mut row = values.to_vec();
-    row.resize(25, "");
+    row.resize(28, "");
     writer.write_record(row)?;
     Ok(())
 }
@@ -94,6 +94,9 @@ fn export_csv(destination: &Path, report: &ReportData) -> AppResult<()> {
             "inventaire_id",
             "sequence_cloture",
             "nature_mouvement",
+            "remboursement_id",
+            "dette_id",
+            "allocation_fcfa_hors_total",
         ],
     )?;
     for inventory in &report.inventories {
@@ -173,23 +176,96 @@ fn export_csv(destination: &Path, report: &ReportData) -> AppResult<()> {
                 &debt.status,
             ],
         )?;
-        for payment in &debt.payments {
+    }
+    for payment in &report.repayments {
+        csv_row(
+            &mut writer,
+            [
+                "remboursement",
+                &payment.paid_at,
+                &payment.customer_name,
+                &payment.account_snapshot.provider,
+                &payment.account_snapshot.account_id,
+                &payment.account_snapshot.name,
+                payment.account_snapshot.identifier.as_deref().unwrap_or(""),
+                &payment.amount.to_string(),
+                "",
+                payment.note.as_deref().unwrap_or(""),
+                &payment.customer_id,
+                &payment.customer_phone,
+                &payment.id,
+                "",
+                &payment.created_at,
+                "Gérant",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                if payment.legacy { "unitaire" } else { "global" },
+                &payment.id,
+            ],
+        )?;
+        for allocation in &payment.allocations {
             csv_row(
                 &mut writer,
                 [
-                    "remboursement",
+                    "allocation_remboursement",
                     &payment.paid_at,
-                    &debt.customer_name,
-                    &payment.account,
-                    &payment.account_snapshot.account_id,
-                    &payment.account_snapshot.name,
-                    payment.account_snapshot.identifier.as_deref().unwrap_or(""),
-                    &payment.amount.to_string(),
+                    &payment.customer_name,
                     "",
-                    payment.note.as_deref().unwrap_or(""),
+                    "",
+                    "",
+                    "",
+                    "",
+                    &allocation
+                        .remaining_after
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                    "Détail hors total des remboursements",
+                    &payment.customer_id,
+                    &payment.customer_phone,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    &payment.id,
+                    &allocation.debt_id,
+                    &allocation.amount.to_string(),
                 ],
             )?;
         }
+    }
+    for client in &report.debt_customers {
+        csv_row(
+            &mut writer,
+            [
+                "client_dettes",
+                "",
+                &client.name,
+                "",
+                "",
+                "",
+                "",
+                "",
+                &client.remaining.to_string(),
+                "Solde actuel",
+                &client.id,
+                &client.phone,
+            ],
+        )?;
     }
     for b in &report.custody.balances {
         csv_row(
@@ -584,7 +660,7 @@ fn export_xlsx(destination: &Path, report: &ReportData) -> AppResult<()> {
         sheet.set_name("Remboursements").map_err(xlsx_err)?;
         for (column, title) in [
             "Date",
-            "Dette ID",
+            "Remboursement ID",
             "Client",
             "Compte ID",
             "Compte",
@@ -601,34 +677,138 @@ fn export_xlsx(destination: &Path, report: &ReportData) -> AppResult<()> {
                 .set_column_width(column as u16, 26)
                 .map_err(xlsx_err)?;
         }
+        for (index, payment) in report.repayments.iter().enumerate() {
+            let row = index as u32 + 1;
+            for (column, value) in [
+                &payment.paid_at,
+                &payment.id,
+                &payment.customer_name,
+                &payment.account_snapshot.account_id,
+                &payment.account_snapshot.display_name(),
+            ]
+            .iter()
+            .enumerate()
+            {
+                sheet
+                    .write_string(row, column as u16, *value)
+                    .map_err(xlsx_err)?;
+            }
+            sheet
+                .write_number_with_format(row, 5, payment.amount as f64, &money)
+                .map_err(xlsx_err)?;
+            sheet
+                .write_string(row, 6, payment.note.as_deref().unwrap_or(""))
+                .map_err(xlsx_err)?;
+            sheet
+                .write_string(row, 7, &payment.customer_id)
+                .map_err(xlsx_err)?;
+            sheet
+                .write_string(row, 8, &payment.customer_phone)
+                .map_err(xlsx_err)?;
+            sheet
+                .write_string(
+                    row,
+                    9,
+                    if payment.legacy {
+                        "Unitaire historique"
+                    } else {
+                        "Global"
+                    },
+                )
+                .map_err(xlsx_err)?;
+        }
+        for (column, title) in [(7, "Client ID"), (8, "Téléphone"), (9, "Type")] {
+            sheet
+                .write_string_with_format(0, column, title, &header)
+                .map_err(xlsx_err)?;
+            sheet.set_column_width(column, 26).map_err(xlsx_err)?;
+        }
+    }
+    custody_sheets(&mut workbook, report, &header, &money)?;
+    {
+        let sheet = workbook.add_worksheet();
+        sheet
+            .set_name("Répartition remboursements")
+            .map_err(xlsx_err)?;
+        for (col, title) in [
+            "Remboursement ID",
+            "Dette ID",
+            "Date dette",
+            "Affectation (hors total)",
+            "Reste après paiement",
+        ]
+        .iter()
+        .enumerate()
+        {
+            sheet
+                .write_string_with_format(0, col as u16, *title, &header)
+                .map_err(xlsx_err)?;
+            sheet.set_column_width(col as u16, 32).map_err(xlsx_err)?;
+        }
         let mut row = 1;
-        for debt in &report.debts {
-            for payment in &debt.payments {
-                for (column, value) in [
-                    &payment.paid_at,
-                    &debt.id,
-                    &debt.customer_name,
-                    &payment.account_snapshot.account_id,
-                    &payment.account_snapshot.display_name(),
-                ]
-                .iter()
-                .enumerate()
-                {
+        for p in &report.repayments {
+            for a in &p.allocations {
+                sheet.write_string(row, 0, &p.id).map_err(xlsx_err)?;
+                sheet.write_string(row, 1, &a.debt_id).map_err(xlsx_err)?;
+                sheet.write_string(row, 2, &a.issued_at).map_err(xlsx_err)?;
+                sheet
+                    .write_number_with_format(row, 3, a.amount as f64, &money)
+                    .map_err(xlsx_err)?;
+                if let Some(remaining) = a.remaining_after {
                     sheet
-                        .write_string(row, column as u16, *value)
+                        .write_number_with_format(row, 4, remaining as f64, &money)
                         .map_err(xlsx_err)?;
                 }
-                sheet
-                    .write_number_with_format(row, 5, payment.amount as f64, &money)
-                    .map_err(xlsx_err)?;
-                sheet
-                    .write_string(row, 6, payment.note.as_deref().unwrap_or(""))
-                    .map_err(xlsx_err)?;
                 row += 1;
             }
         }
     }
-    custody_sheets(&mut workbook, report, &header, &money)?;
+    {
+        let sheet = workbook.add_worksheet();
+        sheet.set_name("Clients des dettes").map_err(xlsx_err)?;
+        for (col, title) in [
+            "Client ID",
+            "Nom actuel",
+            "Téléphone",
+            "Statut",
+            "Reste actuel",
+            "Remboursé cumulé",
+            "Dettes en retard",
+        ]
+        .iter()
+        .enumerate()
+        {
+            sheet
+                .write_string_with_format(0, col as u16, *title, &header)
+                .map_err(xlsx_err)?;
+            sheet.set_column_width(col as u16, 28).map_err(xlsx_err)?;
+        }
+        for (i, c) in report.debt_customers.iter().enumerate() {
+            let row = i as u32 + 1;
+            for (col, value) in [
+                c.id.as_str(),
+                c.name.as_str(),
+                c.phone.as_str(),
+                if c.active { "Actif" } else { "Archivé" },
+            ]
+            .iter()
+            .enumerate()
+            {
+                sheet
+                    .write_string(row, col as u16, *value)
+                    .map_err(xlsx_err)?;
+            }
+            sheet
+                .write_number_with_format(row, 4, c.remaining as f64, &money)
+                .map_err(xlsx_err)?;
+            sheet
+                .write_number_with_format(row, 5, c.total_repaid as f64, &money)
+                .map_err(xlsx_err)?;
+            sheet
+                .write_number(row, 6, c.overdue_count as f64)
+                .map_err(xlsx_err)?;
+        }
+    }
     workbook
         .save(destination)
         .map_err(|e| AppError::Export(e.to_string()))?;
@@ -941,16 +1121,51 @@ fn export_pdf(destination: &Path, report: &ReportData) -> AppResult<()> {
             format_money(debt.remaining),
             debt.status
         ));
-        for payment in &debt.payments {
+    }
+    lines.push(String::new());
+    lines.push("REMBOURSEMENTS - HORS RECETTES DU JOURNAL".into());
+    lines.push("Filtrés par date du paiement; affectations détaillées hors total.".into());
+    for p in &report.repayments {
+        lines.push(format!(
+            "{} | {} ({}) | Total reçu {}",
+            p.paid_at,
+            p.customer_name,
+            p.customer_phone,
+            format_money(p.amount)
+        ));
+        lines.push(format!(
+            "  Reçu {} | {}",
+            p.id,
+            if p.legacy {
+                "unitaire historique"
+            } else {
+                "global"
+            }
+        ));
+        lines.push(format!("  Compte: {}", p.account_snapshot.display_name()));
+        for a in &p.allocations {
+            lines.push(format!("  Dette {} du {}", a.debt_id, a.issued_at));
             lines.push(format!(
-                "  Reçu le {} | {} | {}",
-                payment.paid_at,
-                payment.account_snapshot.display_name(),
-                format_money(payment.amount)
+                "    Affectation {} | Reste après: {}",
+                format_money(a.amount),
+                a.remaining_after
+                    .map(format_money)
+                    .unwrap_or_else(|| "non suivi à cette date".into())
             ));
         }
     }
-
+    lines.push(String::new());
+    lines.push("CLIENTS DES DETTES - SOLDES ACTUELS".into());
+    for c in &report.debt_customers {
+        lines.push(format!(
+            "{} ({}) | Reste {} | Remboursé {} | {} retard(s)",
+            c.name,
+            c.phone,
+            format_money(c.remaining),
+            format_money(c.total_repaid),
+            c.overdue_count
+        ));
+    }
     lines.push(String::new());
     lines.push("DÉPÔTS CLIENTS - HORS RECETTES ET DÉPENSES".into());
     lines.push("Dates déclarées; reprises et annulations comprises.".into());
@@ -1281,7 +1496,7 @@ mod tests {
             .delimiter(b';')
             .from_path(&csv_path)
             .unwrap();
-        assert_eq!(reader.headers().unwrap().len(), 25);
+        assert_eq!(reader.headers().unwrap().len(), 28);
         let records = reader.records().collect::<Result<Vec<_>, _>>().unwrap();
         let period = records
             .iter()
@@ -1358,6 +1573,8 @@ mod tests {
 
     fn empty_report() -> ReportData {
         ReportData {
+            repayments: vec![],
+            debt_customers: vec![],
             custody: crate::models::CustodyReport {
                 balances: vec![],
                 movements: vec![],
@@ -1398,6 +1615,176 @@ mod tests {
             }
             if format == "xlsx" {
                 assert!(bytes.starts_with(b"PK"));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod debt_export_tests {
+    use super::*;
+    use crate::{
+        db::{self, test_support as fixture},
+        debt_clients,
+        models::*,
+    };
+    use std::io::Read;
+
+    #[test]
+    fn receipts_and_allocations_export_once_independently_of_debt_dates() {
+        let mut c = fixture::multi_database();
+        let client = debt_clients::save_customer(
+            &mut c,
+            SaveDebtCustomerInput {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                customer_id: None,
+                name: "Awa Fall".into(),
+                phone: "771234567".into(),
+                active: true,
+            },
+        )
+        .unwrap();
+        let wave = fixture::id(&c, "Wave 1");
+        let cash = fixture::id(&c, "Espèces");
+        let mut debts = Vec::new();
+        for (amount, date) in [(20_000, "2026-01-01"), (30_000, "2026-01-02")] {
+            debts.push(
+                debt_clients::create_debt(
+                    &mut c,
+                    CreateClientDebtInput {
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        customer_id: client.id.clone(),
+                        account_id: wave.clone(),
+                        amount,
+                        issued_at: date.into(),
+                        due_date: None,
+                        note: None,
+                    },
+                )
+                .unwrap(),
+            );
+        }
+        let preview = debt_clients::preview(
+            &c,
+            &RepaymentPreviewInput {
+                customer_id: client.id.clone(),
+                amount: 35_000,
+                paid_at: "2026-02-01".into(),
+            },
+        )
+        .unwrap();
+        let receipt = debt_clients::record_repayment(
+            &mut c,
+            RecordCustomerRepaymentInput {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                customer_id: client.id.clone(),
+                amount: 35_000,
+                account_id: cash.clone(),
+                paid_at: "2026-02-01".into(),
+                note: None,
+                preview_token: preview.token,
+            },
+        )
+        .unwrap();
+        db::record_debt_payment(
+            &mut c,
+            RecordPaymentInput {
+                debt_id: debts[1].id.clone(),
+                amount: 5_000,
+                account_id: cash,
+                paid_at: "2026-02-02".into(),
+                note: None,
+            },
+        )
+        .unwrap();
+        let report = db::get_report(
+            &c,
+            ReportFilters {
+                from: Some("2026-02-01".into()),
+                to: Some("2026-02-28".into()),
+            },
+        )
+        .unwrap();
+        assert!(report.debts.is_empty());
+        assert_eq!(report.repayments.len(), 2);
+        assert_eq!(report.total_positive, 0);
+        let temp = tempfile::tempdir().unwrap();
+        let csv_path = temp.path().join("repayments.csv");
+        export_csv(&csv_path, &report).unwrap();
+        let records = csv::ReaderBuilder::new()
+            .delimiter(b';')
+            .from_path(&csv_path)
+            .unwrap()
+            .records()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let receipts: Vec<_> = records
+            .iter()
+            .filter(|r| &r[0] == "remboursement")
+            .collect();
+        assert_eq!(receipts.len(), 2);
+        assert_eq!(
+            receipts
+                .iter()
+                .map(|r| r[7].parse::<i64>().unwrap())
+                .sum::<i64>(),
+            40_000
+        );
+        let allocations: Vec<_> = records
+            .iter()
+            .filter(|r| &r[0] == "allocation_remboursement")
+            .collect();
+        assert_eq!(allocations.len(), 3);
+        assert!(allocations.iter().all(|r| r[7].is_empty()));
+        assert_eq!(
+            allocations
+                .iter()
+                .map(|r| r[27].parse::<i64>().unwrap())
+                .sum::<i64>(),
+            40_000
+        );
+        assert_eq!(
+            allocations.iter().filter(|r| r[25] == receipt.id).count(),
+            2
+        );
+        let xlsx_path = temp.path().join("repayments.xlsx");
+        export_xlsx(&xlsx_path, &report).unwrap();
+        let mut zip = zip::ZipArchive::new(fs::File::open(&xlsx_path).unwrap()).unwrap();
+        let mut xml = String::new();
+        zip.by_name("xl/worksheets/sheet5.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        assert_eq!(xml.matches("<row ").count(), 3);
+        assert_eq!(xml.matches("<v>35000</v>").count(), 1);
+        xml.clear();
+        zip.by_name("xl/worksheets/sheet9.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        assert_eq!(xml.matches("<row ").count(), 4);
+        let pdf_path = temp.path().join("repayments.pdf");
+        export_pdf(&pdf_path, &report).unwrap();
+        let pdf = PdfDocument::parse(
+            &fs::read(&pdf_path).unwrap(),
+            &printpdf::PdfParseOptions::default(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let text = pdf
+            .extract_text()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(text.matches("Total reçu 35 000 FCFA").count(), 1);
+        assert!(text.contains("15 000 FCFA"));
+        assert!(text.contains("unitaire historique"));
+        if let Ok(directory) = std::env::var("KER_FINANCE_TEST_EXPORT_DIR") {
+            let dir = Path::new(&directory);
+            fs::create_dir_all(dir).unwrap();
+            for path in [&csv_path, &xlsx_path, &pdf_path] {
+                fs::copy(path, dir.join(path.file_name().unwrap())).unwrap();
             }
         }
     }

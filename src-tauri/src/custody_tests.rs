@@ -322,7 +322,7 @@ fn schema_three_upgrade_is_conditional_and_preserves_history() {
     let before = fixture::historical_data(&db);
     db::migrate(&db).unwrap();
     db::migrate(&db).unwrap();
-    assert_eq!(db::schema_version(&db).unwrap(), 4);
+    assert_eq!(db::schema_version(&db).unwrap(), db::SCHEMA_VERSION);
     assert_eq!(before, fixture::historical_data(&db));
     assert!(db::list_inventories(&db, None)
         .unwrap()

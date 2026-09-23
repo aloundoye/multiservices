@@ -1,10 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  DebtCustomer, SaveDebtCustomerInput, RepaymentPreviewInput, RepaymentPreview, RecordCustomerRepaymentInput, CustomerRepayment,
   CustodyCustomer, CustodyMovement, SaveCustodyCustomerInput, CreateCustodyMovementInput, ReverseCustodyMovementInput, CustodyOpeningInput, CustodyOpeningPreview,
   Product, ProductOperation, StockMovement, CreateProductInput, UpdateProductInput, ArchiveProductInput,
   AdjustStockInput, CreateSaleInput, ReceiveStockInput, CancelProductOperationInput,
   Account, AccountBalanceInput, OpeningAccount, OpeningPreview, CreateAccountInput, UpdateAccountInput,
-  CloseInventoryInput, InventoryCorrectionInput, CreateJournalEntryInput, CreateDebtInput, RecordPaymentInput,
+  CloseInventoryInput, InventoryCorrectionInput, CreateJournalEntryInput, CreateDebtInput,
   AuditEvent,
   BackupInfo,
   BusinessSettings,
@@ -87,7 +88,11 @@ export const api = {
     call<JournalEntry>("reverse_journal_entry", { input: { entryId, reason } }),
   debts: () => call<Debt[]>("list_debts"),
   createDebt: (input: CreateDebtInput) => call<Debt>("create_debt", { input }),
-  payDebt: (input: RecordPaymentInput) => call<Debt>("record_debt_payment", { input }),
+  debtCustomers: () => call<DebtCustomer[]>("list_debt_customers"),
+  saveDebtCustomer: (input: SaveDebtCustomerInput) => call<DebtCustomer>("save_debt_customer", { input }),
+  previewRepayment: (input: RepaymentPreviewInput) => call<RepaymentPreview>("preview_customer_repayment", { input }),
+  repayCustomer: (input: RecordCustomerRepaymentInput) => call<CustomerRepayment>("record_customer_repayment", { input }),
+  customerRepayments: () => call<CustomerRepayment[]>("list_customer_repayments"),
   cancelDebt: (debtId: string, reason: string) =>
     call<Debt>("cancel_debt", { input: { debtId, reason } }),
   report: (filters: ReportFilters) => call<ReportData>("get_report", { filters }),
