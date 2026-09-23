@@ -78,7 +78,7 @@ export default function App() {
       case "custody": return <CustodyPage onChanged={refresh} notify={setToast} initialAction={custodyAction} />;
       case "products": return <ProductsPage onChanged={refresh} notify={setToast} />;
       case "journal": return <JournalPage onChanged={() => void refresh()} notify={setToast} />;
-      case "debts": return <DebtsPage onChanged={() => void refresh()} notify={setToast} />;
+      case "debts": return <DebtsPage onChanged={refresh} notify={setToast} />;
       case "reports": return <ReportsPage notify={setToast} />;
       case "settings": return <SettingsPage notify={setToast} onChanged={() => void refresh()} />;
     }

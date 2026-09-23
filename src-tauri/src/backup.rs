@@ -365,7 +365,7 @@ mod tests {
         let security_before = fs::read(&source.paths.security).unwrap();
         source.set_recovered_session(key.clone().into()).unwrap();
         assert_eq!(fs::read(&source.paths.security).unwrap(), security_before);
-        assert_eq!(db::schema_version(&connection).unwrap(), 4);
+        assert_eq!(db::schema_version(&connection).unwrap(), db::SCHEMA_VERSION);
         assert_eq!(historical_data(&connection), historical);
         assert_eq!(stock::products(&connection).unwrap()[0].stock, 8);
         assert_eq!(stock::operations(&connection).unwrap()[0].amount, 4000);
@@ -445,7 +445,7 @@ mod tests {
                 .unwrap()
                 .manifest
                 .schema_version,
-            4
+            db::SCHEMA_VERSION
         );
         let target_dir = TempDir::new().unwrap();
         let target = AppState::new(target_dir.path().to_path_buf()).unwrap();
@@ -796,5 +796,108 @@ mod tests {
             fs::read(extracted.database).unwrap(),
             b"encrypted database content"
         );
+    }
+}
+
+#[cfg(test)]
+mod debt_backup_tests {
+    use super::*;
+    use crate::{db::test_support::*, debt_clients, models::*};
+
+    #[test]
+    fn used_v4_is_backed_up_before_upgrade_and_v4_v5_restore_preserves_repayments() {
+        const PASSWORD: &str = "une phrase de récupération solide";
+        let dir = tempfile::tempdir().unwrap();
+        let source = AppState::new(dir.path().to_path_buf()).unwrap();
+        let key = vec![65u8; 32];
+        let c = db::open_database(&source.paths.database, &key).unwrap();
+        legacy_database(&c);
+        c.pragma_update(None, "foreign_keys", false).unwrap();
+        for sql in [
+            include_str!("migration_v2.sql"),
+            include_str!("migration_v3.sql"),
+            include_str!("migration_v4.sql"),
+        ] {
+            c.execute_batch(sql).unwrap();
+        }
+        c.pragma_update(None, "foreign_keys", true).unwrap();
+        c.execute_batch("INSERT INTO custody_customers VALUES ('custody','Awa Ndiaye','771234567',1,50000,'2026-01-01'); INSERT INTO custody_movements(id,customer_id,customer_name,customer_phone,kind,delta,capital_adjustment,balance_after,account_id,account_json,occurred_at,posted_at,operator) VALUES ('custody-movement','custody','Awa Ndiaye','771234567','deposit',50000,0,50000,'legacy-cash','{\"accountId\":\"legacy-cash\",\"provider\":\"cash\",\"name\":\"Espèces\",\"identifier\":null}','2026-02-01','2026-02-01T12:00:00Z','Gérant');").unwrap();
+        let historical = historical_data(&c);
+        // Without a usable recovery envelope, migration must not touch the used database.
+        assert!(source.set_recovered_session(key.clone().into()).is_err());
+        assert_eq!(db::schema_version(&c).unwrap(), 4);
+        security::write_envelope(
+            &source.paths.security,
+            &security::test_envelope(&key, "123456", PASSWORD).unwrap(),
+        )
+        .unwrap();
+        let envelope = fs::read(&source.paths.security).unwrap();
+        source.set_recovered_session(key.clone().into()).unwrap();
+        assert_eq!(db::schema_version(&c).unwrap(), 5);
+        assert_eq!(historical_data(&c), historical);
+        assert_eq!(fs::read(&source.paths.security).unwrap(), envelope);
+        let backups = list_backups(&source).unwrap();
+        assert_eq!(backups.len(), 1);
+        let archive4 = backups[0].path.clone();
+        let extracted = extract_and_validate(Path::new(&archive4)).unwrap();
+        assert_eq!(extracted.manifest.schema_version, 4);
+        assert_ne!(
+            &fs::read(&extracted.database).unwrap()[..16],
+            b"SQLite format 3\0"
+        );
+        assert_eq!(
+            historical_data(&db::open_database(&extracted.database, &key).unwrap()),
+            historical
+        );
+        let input = source
+            .with_connection(|c| {
+                let customer = debt_clients::customers(c)?[0].clone();
+                let preview = debt_clients::preview(
+                    c,
+                    &RepaymentPreviewInput {
+                        customer_id: customer.id.clone(),
+                        amount: 25_000,
+                        paid_at: "2026-02-01".into(),
+                    },
+                )?;
+                let input = RecordCustomerRepaymentInput {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    customer_id: customer.id,
+                    amount: 25_000,
+                    account_id: "legacy-cash".into(),
+                    paid_at: "2026-02-01".into(),
+                    note: None,
+                    preview_token: preview.token,
+                };
+                debt_clients::record_repayment(c, input.clone())?;
+                Ok(input)
+            })
+            .unwrap();
+        let expected = source.with_connection(|c| Ok(serde_json::json!({"clients":debt_clients::customers(c)?,"debts":db::list_debts(c,None)?,"payments":debt_clients::repayments(c,None)?,"deposits":crate::custody::movements(c)?}))).unwrap();
+        let archive5 = create_backup(&source, None).unwrap();
+        for (version, path) in [(4, archive4), (5, archive5.path)] {
+            let target_dir = tempfile::tempdir().unwrap();
+            let target = AppState::new(target_dir.path().to_path_buf()).unwrap();
+            restore_backup_with(
+                &target,
+                RestoreInput {
+                    backup_path: path,
+                    recovery_password: PASSWORD.into(),
+                    new_pin: "654321".into(),
+                },
+                security::test_envelope,
+            )
+            .unwrap();
+            target.with_connection(|c| {
+                assert_eq!(db::schema_version(c)?,5);
+                assert_eq!(crate::custody::customers(c)?[0].balance,50_000);
+                if version == 4 { assert_eq!(historical_data(c),historical); assert_eq!(debt_clients::repayments(c,None)?.len(),1); }
+                else {
+                    debt_clients::record_repayment(c,input.clone())?;
+                    assert_eq!(serde_json::json!({"clients":debt_clients::customers(c)?,"debts":db::list_debts(c,None)?,"payments":debt_clients::repayments(c,None)?,"deposits":crate::custody::movements(c)?}),expected);
+                }
+                db::integrity_check(c)
+            }).unwrap();
+        }
     }
 }

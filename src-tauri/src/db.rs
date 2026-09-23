@@ -9,13 +9,13 @@ use crate::{
     accounts, custody,
     domain::{
         clean_optional, clean_required, signed_journal_amount, validate_balances,
-        validate_debt_provider, validate_variance_explanation,
+        validate_variance_explanation,
     },
     error::{AppError, AppResult},
     models::*,
 };
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 pub fn open_database(path: &Path, database_key: &[u8]) -> AppResult<Connection> {
     let connection = Connection::open(path)?;
@@ -74,6 +74,10 @@ pub fn migrate(connection: &Connection) -> AppResult<()> {
         }
         if version < 4 {
             tx.execute_batch(include_str!("migration_v4.sql"))?;
+        }
+        if version < 5 {
+            tx.execute_batch(include_str!("migration_v5.sql"))?;
+            crate::debt_clients::migrate_customers(&tx)?;
         }
         let broken = tx.prepare("PRAGMA foreign_key_check")?.exists([])?;
         if broken {
@@ -191,8 +195,13 @@ pub(crate) fn now() -> String {
 }
 
 pub(crate) fn validate_date(value: &str, label: &str) -> AppResult<String> {
-    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+    let parsed = NaiveDate::parse_from_str(value, "%Y-%m-%d")
         .map_err(|_| AppError::Validation(format!("{label} doit être une date valide.")))?;
+    if parsed.format("%Y-%m-%d").to_string() != value {
+        return Err(AppError::Validation(format!(
+            "{label} doit être au format AAAA-MM-JJ."
+        )));
+    }
     Ok(value.to_string())
 }
 
@@ -914,7 +923,7 @@ pub fn list_debts(
 ) -> AppResult<Vec<Debt>> {
     let mut statement = connection.prepare(
         "SELECT id, customer_name, phone, provider, principal, remaining, issued_at,
-                due_date, note, status, created_at, account_id, account_name, account_identifier
+                due_date, note, status, created_at, account_id, account_name, account_identifier, customer_id
          FROM debts ORDER BY
            CASE status WHEN 'open' THEN 0 WHEN 'partial' THEN 1 WHEN 'paid' THEN 2 ELSE 3 END,
            COALESCE(due_date, '9999-12-31'), issued_at DESC",
@@ -939,6 +948,7 @@ pub fn list_debts(
                     name: row.get(12)?,
                     identifier: row.get(13)?,
                 },
+                row.get::<_, String>(14)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -957,12 +967,14 @@ pub fn list_debts(
         base_status,
         created_at,
         account_snapshot,
+        customer_id,
     ) in raw
     {
         if filters.is_some_and(|f| !date_in_filter(&issued_at, f)) {
             continue;
         }
         debts.push(Debt {
+            customer_id,
             account_snapshot,
             payments: payment_for_debt(connection, &id)?,
             status: display_debt_status(&base_status, remaining, due_date.as_deref(), today),
@@ -981,12 +993,13 @@ pub fn list_debts(
     Ok(debts)
 }
 
+#[cfg(test)]
 pub fn create_debt(connection: &mut Connection, input: CreateDebtInput) -> AppResult<Debt> {
     let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let customer_name = clean_required(&input.customer_name, "Le nom du client", 2)?;
     let phone = clean_required(&input.phone, "Le téléphone", 6)?;
     let account = accounts::get(&tx, &input.account_id, true)?.snapshot;
-    validate_debt_provider(&account.provider)?;
+    crate::domain::validate_debt_provider(&account.provider)?;
     if input.amount <= 0 {
         return Err(AppError::Validation(
             "Le montant de la dette doit être supérieur à zéro.".into(),
@@ -1038,6 +1051,7 @@ pub fn create_debt(connection: &mut Connection, input: CreateDebtInput) -> AppRe
             "dueDate": due_date
         }),
     )?;
+    crate::debt_clients::migrate_customers(&tx)?;
     tx.commit()?;
     list_debts(connection, None)?
         .into_iter()
@@ -1045,6 +1059,7 @@ pub fn create_debt(connection: &mut Connection, input: CreateDebtInput) -> AppRe
         .ok_or(AppError::NotFound)
 }
 
+#[cfg(test)]
 pub fn record_debt_payment(
     connection: &mut Connection,
     input: RecordPaymentInput,
@@ -1238,6 +1253,8 @@ pub fn get_report(connection: &Connection, filters: ReportFilters) -> AppResult<
     let total_variance = inventories.iter().map(|item| item.variance).sum();
     let outstanding_receivables = open_receivables(connection)?;
     Ok(ReportData {
+        repayments: crate::debt_clients::repayments(connection, Some(&filters))?,
+        debt_customers: crate::debt_clients::customers(connection)?,
         custody: custody::report(connection, &filters)?,
         generated_at: now(),
         filters,

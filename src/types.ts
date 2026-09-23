@@ -95,6 +95,7 @@ export interface DebtPayment {
 }
 
 export interface Debt {
+  customerId: string;
   accountSnapshot: AccountSnapshot;
   id: string;
   customerName: string;
@@ -103,8 +104,8 @@ export interface Debt {
   principal: Money;
   remaining: Money;
   issuedAt: string;
-  dueDate?: string;
-  note?: string;
+  dueDate?: string | null;
+  note?: string | null;
   status: "open" | "partial" | "paid" | "overdue" | "cancelled";
   createdAt: string;
   payments: DebtPayment[];
@@ -132,6 +133,8 @@ export interface ReportFilters {
 }
 
 export interface ReportData {
+  repayments: CustomerRepayment[];
+  debtCustomers: DebtCustomer[];
   custody: CustodyReport;
   generatedAt: string;
   filters: ReportFilters;
@@ -202,8 +205,7 @@ export interface OpeningPreview { balances: AccountBalances; liquidity: Money; d
 export interface CloseInventoryInput { balances: AccountBalanceInput[]; varianceCategory?: string | null; varianceNote?: string | null }
 export interface InventoryCorrectionInput { inventoryId: string; amount: Money; direction: string; accountId: string; reason: string }
 export interface CreateJournalEntryInput { entryType: string; amount: Money; accountId: string; occurredAt: string; reference?: string | null; note?: string | null }
-export interface CreateDebtInput { customerName: string; phone: string; accountId: string; amount: Money; issuedAt: string; dueDate?: string | null; note?: string | null }
-export interface RecordPaymentInput { debtId: string; amount: Money; accountId: string; paidAt: string; note?: string | null }
+export interface CreateDebtInput { requestId: string; customerId: string; accountId: string; amount: Money; issuedAt: string; dueDate?: string | null; note?: string | null }
 
 export interface Product { id: string; name: string; price: Money; stock: number; active: boolean }
 export interface ProductOperationLink { id: string; kind: "sale" | "receipt" }
@@ -244,3 +246,24 @@ export interface CustodyOpeningPreview { total: Money; expectedCapital: Money; c
 export interface CustodyBalanceSnapshot { customerId: string; customerName: string; customerPhone: string | null; balance: Money }
 export interface CustodyPeriodBalance { customerId: string; customerName: string; openingBalance: Money; increases: Money; decreases: Money; closingBalance: Money }
 export interface CustodyReport { balances: CustodyPeriodBalance[]; movements: CustodyMovement[]; openingBalance: Money; closingBalance: Money }
+
+export interface DebtCustomer {
+  id: string; name: string; phone: string; active: boolean;
+  remaining: Money; totalRepaid: Money; overdueCount: number; overdueAmount: Money;
+}
+export interface SaveDebtCustomerInput {
+  requestId: string; customerId?: string | null; name: string; phone: string; active: boolean;
+}
+export interface RepaymentAllocation {
+  debtId: string; issuedAt: string; amount: Money; remainingAfter: Money | null;
+}
+export interface RepaymentPreviewInput { customerId: string; amount: Money; paidAt: string }
+export interface RepaymentPreview { token: string; eligibleTotal: Money; allocations: RepaymentAllocation[] }
+export interface RecordCustomerRepaymentInput extends RepaymentPreviewInput {
+  requestId: string; accountId: string; note?: string | null; previewToken: string;
+}
+export interface CustomerRepayment {
+  id: string; customerId: string; customerName: string; customerPhone: string;
+  amount: Money; accountSnapshot: AccountSnapshot; paidAt: string; note: string | null;
+  createdAt: string; legacy: boolean; allocations: RepaymentAllocation[];
+}

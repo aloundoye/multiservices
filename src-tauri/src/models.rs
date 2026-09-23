@@ -173,6 +173,7 @@ pub struct ReverseEntryInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Debt {
+    pub customer_id: String,
     pub account_snapshot: AccountSnapshot,
     pub id: String,
     pub customer_name: String,
@@ -201,6 +202,7 @@ pub struct DebtPayment {
     pub created_at: String,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateDebtInput {
@@ -213,6 +215,7 @@ pub struct CreateDebtInput {
     pub note: Option<String>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordPaymentInput {
@@ -269,6 +272,8 @@ pub struct ReportFilters {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportData {
+    pub repayments: Vec<CustomerRepayment>,
+    pub debt_customers: Vec<DebtCustomer>,
     pub custody: CustodyReport,
     pub generated_at: String,
     pub filters: ReportFilters,
@@ -643,4 +648,86 @@ pub struct CustodyReport {
     pub movements: Vec<CustodyMovement>,
     pub opening_balance: Money,
     pub closing_balance: Money,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebtCustomer {
+    pub id: String,
+    pub name: String,
+    pub phone: String,
+    pub active: bool,
+    pub remaining: Money,
+    pub total_repaid: Money,
+    pub overdue_count: usize,
+    pub overdue_amount: Money,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveDebtCustomerInput {
+    pub request_id: String,
+    pub customer_id: Option<String>,
+    pub name: String,
+    pub phone: String,
+    pub active: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateClientDebtInput {
+    pub request_id: String,
+    pub customer_id: String,
+    pub account_id: String,
+    pub amount: Money,
+    pub issued_at: String,
+    pub due_date: Option<String>,
+    pub note: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RepaymentAllocation {
+    pub debt_id: String,
+    pub issued_at: String,
+    pub amount: Money,
+    // Unknown for legacy payments: do not invent a historical balance.
+    pub remaining_after: Option<Money>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepaymentPreviewInput {
+    pub customer_id: String,
+    pub amount: Money,
+    pub paid_at: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepaymentPreview {
+    pub token: String,
+    pub eligible_total: Money,
+    pub allocations: Vec<RepaymentAllocation>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordCustomerRepaymentInput {
+    pub request_id: String,
+    pub customer_id: String,
+    pub amount: Money,
+    pub account_id: String,
+    pub paid_at: String,
+    pub note: Option<String>,
+    pub preview_token: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomerRepayment {
+    pub id: String,
+    pub customer_id: String,
+    pub customer_name: String,
+    pub customer_phone: String,
+    pub amount: Money,
+    pub account_snapshot: AccountSnapshot,
+    pub paid_at: String,
+    pub note: Option<String>,
+    pub created_at: String,
+    pub legacy: bool,
+    pub allocations: Vec<RepaymentAllocation>,
 }

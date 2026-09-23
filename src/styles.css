@@ -299,3 +299,9 @@ p { color: var(--muted); line-height: 1.55; }
 }
 .custody-dashboard .metric-icon { position: static; flex-shrink: 0; }
 .custody-report > .panel-header { padding: 20px 24px 0; }
+
+.debt-reference { display: block; color: var(--muted); font-size: .76rem; margin-top: 4px; overflow-wrap: anywhere; }
+.debt-history-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 0; width: 100%; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: inherit; text-align: left; }
+button.debt-history-row { cursor: pointer; }
+
+.operation-fields { display: flex; flex-direction: column; gap: 18px; padding: 0; margin: 0; border: 0; min-width: 0; }
